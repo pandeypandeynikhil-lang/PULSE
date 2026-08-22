@@ -1,0 +1,24 @@
+{
+  "_comment": "Red-flag lexicon shared by Layer 0 (pre-arrival audio transcript) and Layer 2 (in-person chief complaint). Weights are 0-1 contributions to the symptom severity sub-score. Phrases are matched case-insensitively on word boundaries. In production this layer is an LLM call with this lexicon as a grounding rubric; the deterministic matcher below is the failover path and is what runs offline.",
+  "flags": [
+    { "id": "chest_pain",      "label": "chest pain",            "weight": 0.82, "system": "cardiac",     "patterns": ["chest pain", "chest tightness", "pressure in (his|her|my) chest", "clutching (his|her|my) chest", "crushing pain"] },
+    { "id": "diaphoresis",     "label": "diaphoresis",           "weight": 0.71, "system": "cardiac",     "patterns": ["sweating", "sweaty", "clammy", "drenched", "cold sweat"] },
+    { "id": "dyspnoea",        "label": "dyspnoea",              "weight": 0.76, "system": "respiratory", "patterns": ["can'?t breathe", "short of breath", "trouble breathing", "gasping", "can'?t get a (full )?breath", "breathless"] },
+    { "id": "pallor",          "label": "pallor / cyanosis",     "weight": 0.58, "system": "general",     "patterns": ["grey", "gray", "pale", "ashen", "blue lips", "white as a sheet"] },
+    { "id": "thunderclap",     "label": "thunderclap headache",  "weight": 0.88, "system": "neuro",       "patterns": ["worst headache", "sudden severe headache", "thunderclap", "hit (him|her|me) like"] },
+    { "id": "focal_deficit",   "label": "focal deficit",         "weight": 0.90, "system": "neuro",       "patterns": ["can'?t feel (his|her|my) (left|right)", "face is drooping", "slurred speech", "can'?t move (his|her|my)", "weakness on one side", "one[- ]sided weakness"] },
+    { "id": "altered_mental",  "label": "altered mental status",  "weight": 0.84, "system": "neuro",       "patterns": ["confused", "not making sense", "unresponsive", "won'?t wake", "drowsy", "disoriented"] },
+    { "id": "syncope",         "label": "syncope",               "weight": 0.62, "system": "general",     "patterns": ["passed out", "fainted", "collapsed", "blacked out", "lost consciousness"] },
+    { "id": "tearing_back",    "label": "tearing back pain",     "weight": 0.86, "system": "vascular",    "patterns": ["tearing", "ripping", "between (his|her|my) shoulder blades", "back pain radiating"] },
+    { "id": "haemorrhage",     "label": "active haemorrhage",    "weight": 0.87, "system": "trauma",      "patterns": ["bleeding heavily", "won'?t stop bleeding", "lot of blood", "vomiting blood", "coughing (up )?blood"] },
+    { "id": "sepsis_signs",    "label": "possible sepsis",       "weight": 0.79, "system": "infection",   "patterns": ["high fever", "shivering", "rigors", "shaking", "burning up", "hasn'?t passed urine"] },
+    { "id": "abdo_rigid",      "label": "rigid abdomen",         "weight": 0.74, "system": "abdominal",   "patterns": ["stomach is hard", "rigid", "can'?t straighten up", "severe abdominal pain"] },
+    { "id": "anaphylaxis",     "label": "possible anaphylaxis",  "weight": 0.89, "system": "allergy",     "patterns": ["throat is closing", "swelling up", "hives", "allergic reaction", "face is swelling"] },
+    { "id": "seizure",         "label": "seizure activity",      "weight": 0.81, "system": "neuro",       "patterns": ["seizure", "fitting", "convulsing", "shaking uncontrollably"] },
+    { "id": "sudden_onset",    "label": "sudden onset",          "weight": 0.44, "system": "temporal",    "patterns": ["suddenly", "out of nowhere", "all at once", "started about", "came on fast"] },
+    { "id": "minor_injury",    "label": "minor injury",          "weight": 0.08, "system": "trauma",      "patterns": ["twisted (his|her|my) ankle", "sprain", "small cut", "grazed", "stubbed"] },
+    { "id": "low_acuity",      "label": "low-acuity presentation","weight": 0.05, "system": "general",     "patterns": ["sore throat", "runny nose", "prescription refill", "rash", "mild"] }
+  ],
+  "age_extractors": ["(?:he'?s|she'?s|i'?m|aged|age)\\s+(\\d{1,3})", "(\\d{1,3})[- ]year[- ]old"],
+  "onset_extractors": ["(\\d{1,3})\\s*(minute|min|hour|hr|day)s?\\s*ago", "about\\s+(\\w+)\\s+(minute|hour)s?\\s*ago"]
+}

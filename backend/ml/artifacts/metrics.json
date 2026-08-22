@@ -1,0 +1,26 @@
+{
+  "n_train": 48000,
+  "n_test": 12000,
+  "prevalence": 0.124,
+  "roc_auc": 0.8602,
+  "pr_auc": 0.6962,
+  "brier": 0.0602,
+  "features": [
+    "age",
+    "heart_rate",
+    "systolic_bp",
+    "diastolic_bp",
+    "resp_rate",
+    "spo2",
+    "temperature",
+    "shock_index",
+    "arrival_ambulance",
+    "n_vitals_present"
+  ],
+  "data_source": "synthetic cohort (literature-calibrated) \u2014 see docstring",
+  "operating_threshold": 0.0501,
+  "sensitivity": 0.8501,
+  "precision": 0.2545,
+  "alert_rate": 0.4143,
+  "undertriage_rate": 0.0186
+}
