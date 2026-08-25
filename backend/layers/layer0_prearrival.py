@@ -46,6 +46,7 @@ def score(transcript: str, arrival_mode: str = "ambulance") -> dict[str, Any]:
         "age_extracted": nlp["age"],
         "systems": nlp["systems"],
         "actions": _actions(prior, nlp["systems"]),
+        "nlp_source": nlp.get("source", "lexicon"),
     }
 
 

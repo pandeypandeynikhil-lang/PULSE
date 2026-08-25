@@ -14,9 +14,16 @@ import os
 import time
 from typing import Any
 
+from dotenv import load_dotenv
+
+load_dotenv()  # reads .env into os.environ, if present — before anything
+               # below reads GEMINI_API_KEY / GROQ_API_KEY / PULSE_NLP_MODE.
+               # Safe no-op if there is no .env: PULSE runs offline by default.
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from . import db, simulation
 from .layers import (layer0_prearrival, layer1_vitals, layer2_symptom_nlp,
@@ -52,6 +59,7 @@ class Engine:
         self.sim_minutes = 0.0
         self.capacity = copy.deepcopy(simulation.BASE_CAPACITY)
         self.events = []
+        self.voice_seq = 0  # counts Voice Intake patients created this shift
         for p in self.patients:
             if p.arrive_min <= 0:
                 p.status = "waiting"
@@ -203,6 +211,73 @@ class Engine:
                  p.display_id)
         return {"ok": True}
 
+    # ------------------------------------------------------------- voice intake
+    async def create_voice_patient(self, transcript: str, lang: str) -> dict[str, Any]:
+        """A spoken account from a patient or companion who doesn't share a
+        language with the nurse becomes a new patient on the board — the same
+        "provisional signal before the usual data exists" idea as Layer 0,
+        just triggered live from the console instead of from a scripted
+        ambulance call.
+
+        Requires the LLM tier: the deterministic lexicon can't translate, and
+        limping along on an English-only regex match against foreign text
+        would silently extract nothing while looking like it worked. We fail
+        honestly instead.
+        """
+        transcript = (transcript or "").strip()[:2000]
+        if not transcript:
+            return {"ok": False, "error": "Nothing to send yet."}
+
+        from .layers import nlp_llm  # local import: gemini/groq SDKs stay
+                                      # optional unless the LLM tier is on
+        if (os.environ.get("PULSE_NLP_MODE") != "llm"
+                or not nlp_llm.any_provider_configured()):
+            return {"ok": False, "error": ("Voice intake needs the LLM tier — "
+                    "set PULSE_NLP_MODE=llm and GEMINI_API_KEY and/or "
+                    "GROQ_API_KEY (see .env.example) and restart PULSE.")}
+
+        loop = asyncio.get_running_loop()
+        # The extraction call is a blocking network request; running it off
+        # the event loop keeps the scheduler tick (and every other patient's
+        # live board update) moving while this one call is in flight.
+        raw = await loop.run_in_executor(
+            None, nlp_llm.extract_voice_intake, transcript, lang)
+        if raw is None:
+            return {"ok": False, "error": ("Translation/extraction failed or "
+                    "timed out — try again.")}
+
+        provider = raw.get("_provider")
+        self.voice_seq += 1
+        pid, display_id = f"voice{self.voice_seq:02d}", f"PT V{self.voice_seq}"
+
+        age = raw.get("age")
+        age = age if isinstance(age, int) and 0 < age < 120 else None
+
+        vitals = {k: v for k, v in (raw.get("vitals") or {}).items()
+                 if isinstance(v, (int, float))}
+
+        complaint = (raw.get("complaint_summary") or transcript[:80]).strip()
+
+        p = simulation.SimPatient(
+            id=pid, display_id=display_id, age=age, arrival_mode="voice intake",
+            complaint=complaint, arrive_min=self.sim_minutes,
+            timeline=[simulation.VitalsPoint(0.0, vitals)], transcript=transcript)
+        p.status = "waiting"
+        p.arrived_at_min = self.sim_minutes
+        self.patients.append(p)
+
+        db.add_patient(self.conn, {
+            "id": p.id, "display_id": p.display_id, "age": p.age,
+            "arrival_mode": p.arrival_mode, "complaint": p.complaint,
+            "transcript": p.transcript, "arrived_at": p.arrived_at_min,
+            "status": p.status, "assigned_esi": p.assigned_esi})
+
+        self.log("voice", f"{display_id}: voice intake ({lang} via "
+                 f"{provider or 'llm'}) — “{complaint}”", display_id)
+        return {"ok": True, "id": pid, "display_id": display_id,
+                "complaint": complaint, "age": age, "vitals": vitals,
+                "provider": provider}
+
     # --------------------------------------------------------------- output
     def board(self) -> dict[str, Any]:
         rows, inbound = [], []
@@ -219,7 +294,8 @@ class Engine:
                 continue
             rows.append({
                 "id": p.id, "display_id": p.display_id, "age": p.age,
-                "complaint": p.complaint, "arrival_mode": p.arrival_mode,
+                "complaint": p.complaint, "transcript": p.transcript,
+                "arrival_mode": p.arrival_mode,
                 "status": p.status, "assigned_esi": p.assigned_esi,
                 "ari": res["fused"]["ari"], "esi": res["fused"]["esi"],
                 "confidence": res["fused"]["confidence"],
@@ -234,6 +310,7 @@ class Engine:
                 "drivers": res["vitals_out"]["drivers"] if res["vitals_out"] else [],
                 "vitals_present": res["vitals_out"]["vitals_present"] if res["vitals_out"] else 0,
                 "spans": res["symptom"]["spans"],
+                "nlp_source": res["symptom"].get("nlp_source", "lexicon"),
                 "prior": p.prior,
             })
 
@@ -262,6 +339,26 @@ class Engine:
                 dead.add(ws)
         self.clients -= dead
 
+    # ---------------------------------------------------------- nlp warm-up
+    async def prewarm_nlp(self) -> None:
+        """Warms `nlp_core`'s per-text cache for every patient's
+        complaint/transcript, concurrently, before the scheduler starts
+        ticking (or right after a reset). `score_patient()` runs synchronously
+        inside `tick()`, so without this the LLM tier's first, uncached call
+        for each of a dozen-odd patients would happen one at a time inside the
+        tick loop — each up to PULSE_NLP_TIMEOUT seconds — which could
+        visibly freeze the whole board for the better part of a minute right
+        when a demo starts. No-op if the LLM tier is off."""
+        if os.environ.get("PULSE_NLP_MODE") != "llm":
+            return
+        from .layers import nlp_core
+        texts = {p.complaint for p in self.patients if p.complaint}
+        texts |= {p.transcript for p in self.patients if p.transcript}
+        loop = asyncio.get_running_loop()
+        await asyncio.gather(
+            *(loop.run_in_executor(None, nlp_core.extract, t) for t in texts),
+            return_exceptions=True)
+
 
 def _rank(esi: str | None) -> int:
     return {"I": 1, "II": 2, "III": 3, "IV": 4, "V": 5}.get(esi or "V", 5)
@@ -286,6 +383,8 @@ engine = Engine()
 
 @app.on_event("startup")
 async def _startup() -> None:
+    await engine.prewarm_nlp()
+
     async def loop() -> None:
         while True:
             try:
@@ -320,6 +419,19 @@ async def api_decide(patient_id: str, action: str, esi: str | None = None):
     return JSONResponse(out)
 
 
+class VoiceIntakeIn(BaseModel):
+    transcript: str
+    lang: str = "en-US"
+
+
+@app.post("/api/voice-intake")
+async def api_voice_intake(body: VoiceIntakeIn):
+    out = await engine.create_voice_patient(body.transcript, body.lang)
+    if out.get("ok"):
+        await engine.broadcast()
+    return JSONResponse(out)
+
+
 @app.post("/api/admit/{patient_id}")
 async def api_admit(patient_id: str):
     out = engine.admit(patient_id)
@@ -335,6 +447,7 @@ async def api_control(what: str, value: str | None = None):
         engine.running = not engine.running
     elif what == "reset":
         engine.reset()
+        await engine.prewarm_nlp()
     await engine.broadcast()
     return JSONResponse({"ok": True, "speed": engine.speed,
                          "running": engine.running})

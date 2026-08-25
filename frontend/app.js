@@ -7,6 +7,7 @@ let STATE = null, OPEN = null;
 const $ = (s) => document.querySelector(s);
 const esc = (s) => (s || "").replace(/[&<>"]/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const cap = (s) => (s || "").replace(/^\w/, c => c.toUpperCase());
 
 /* ---------------- socket ---------------- */
 let POLLING = false;
@@ -41,6 +42,80 @@ function connect() {
 connect();
 
 async function post(url) { await fetch(url, { method: "POST" }); }
+async function postJSON(url, body) {
+  const r = await fetch(url, { method: "POST",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return r.json();
+}
+
+/* ---------------- voice intake ---------------- */
+/* Speech-to-text runs entirely in the browser (Web Speech API) — no audio
+   ever leaves the machine. Only the recognised TEXT is sent to the backend,
+   which translates and extracts via the LLM tier. This is also why it fails
+   soft: unsupported browser -> mic disabled, type instead; LLM tier off ->
+   the backend says so plainly rather than pretending to work. */
+function initVoiceIntake() {
+  const micBtn = $("#micBtn"), textEl = $("#voiceText"), statusEl = $("#voiceStatus");
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let recognition = null, recording = false, finalText = "";
+
+  if (!SR) {
+    micBtn.disabled = true;
+    micBtn.textContent = "Mic unavailable";
+    statusEl.textContent = "Speech recognition isn't supported in this browser (try Chrome or Edge) — type the account below instead.";
+  } else {
+    micBtn.addEventListener("click", () => {
+      if (recording) { recognition.stop(); return; }
+      recognition = new SR();
+      recognition.lang = $("#voiceLang").value;
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      finalText = textEl.value ? textEl.value + " " : "";
+
+      recognition.onresult = (e) => {
+        let interim = "";
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const t = e.results[i][0].transcript;
+          if (e.results[i].isFinal) finalText += t + " "; else interim += t;
+        }
+        textEl.value = (finalText + interim).trim();
+      };
+      const stop = () => { recording = false; micBtn.classList.remove("on"); micBtn.textContent = "🎤 Start"; };
+      recognition.onerror = stop;
+      recognition.onend = stop;
+      recognition.start();
+      recording = true;
+      micBtn.classList.add("on");
+      micBtn.textContent = "⏹ Stop";
+      statusEl.textContent = "Listening…";
+    });
+  }
+
+  $("#voiceSend").addEventListener("click", async () => {
+    const transcript = textEl.value.trim();
+    if (!transcript) { statusEl.textContent = "Nothing to send yet."; return; }
+    if (recording) recognition.stop();
+    statusEl.textContent = "Translating & extracting…";
+    $("#voiceSend").disabled = true;
+    try {
+      const out = await postJSON("/api/voice-intake",
+        { transcript, lang: $("#voiceLang").value });
+      if (out.ok) {
+        statusEl.textContent = `${out.display_id} added — "${out.complaint}"`
+          + (out.age ? `, age ${out.age}` : "")
+          + (out.provider ? ` (via ${cap(out.provider)})` : "") + `. Watch the board.`;
+        textEl.value = "";
+      } else {
+        statusEl.textContent = out.error || "Voice intake failed.";
+      }
+    } catch (_) {
+      statusEl.textContent = "Request failed — is the backend running?";
+    } finally {
+      $("#voiceSend").disabled = false;
+    }
+  });
+}
+initVoiceIntake();
 
 /* ---------------- sparkline ---------------- */
 function spark(trace, alert) {
@@ -51,13 +126,29 @@ function spark(trace, alert) {
     const y = h - ((v - lo) / (hi - lo)) * h;
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(" ");
-  const col = alert ? "#FF3B5C" : "#A100FF";
+  const col = alert ? "#B23B54" : "#7A45CE";
   const last = trace[trace.length - 1];
   const ly = h - ((last - lo) / (hi - lo)) * h;
   return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
     <polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.8"
       stroke-linejoin="round" stroke-linecap="round"/>
     <circle cx="${w}" cy="${ly.toFixed(1)}" r="2.4" fill="${col}"/></svg>`;
+}
+
+/* Small provenance badge for whichever tier actually answered the red-flag
+   extraction — makes the Gemini -> Groq -> lexicon failover something you
+   can watch happen, not just a claim in the docs. */
+function nlpBadge(source) {
+  const llm = (source || "").startsWith("llm");
+  const fallback = source === "llm-groq";  // second provider actually had to answer
+  const label = source === "llm-gemini" ? "Gemini"
+    : source === "llm-groq" ? "Groq fallback"
+    : llm ? "LLM" : "Lexicon fallback";
+  const title = source === "llm-gemini" ? "Extracted by Gemini (primary tier)"
+    : source === "llm-groq" ? "Gemini unavailable — Groq answered instead"
+    : llm ? "Extracted by the LLM tier"
+    : "LLM tier unavailable or disabled — deterministic lexicon fallback served this";
+  return `<span class="nlpbadge ${fallback ? "groq" : llm ? "llm" : "lex"}" title="${title}">${label}</span>`;
 }
 
 /* ---------------- render ---------------- */
@@ -67,7 +158,7 @@ function render() {
 
   document.querySelectorAll("[data-speed]").forEach(b =>
     b.classList.toggle("on", ({ "1x": 1, "10x": 10, "60x": 60, "180x": 180 })[b.dataset.speed] === STATE.speed));
-  $("#pause").textContent = STATE.running ? "PAUSE" : "RESUME";
+  $("#pause").textContent = STATE.running ? "Pause" : "Resume";
 
   renderInbound();
   renderRows();
@@ -102,7 +193,8 @@ function renderInbound() {
         ${pr ? `<div class="acts">${pr.actions.map(a => `<span>✓ ${esc(a)}</span>`).join("")}</div>` : ""}
       </div>
       ${pr ? `<div class="priorbox"><div class="pv">${pr.prior}</div>
-        <div class="pl">PROVISIONAL · ${pr.confidence.toUpperCase()}</div></div>` : ""}
+        <div class="pl">Provisional · ${cap(pr.confidence)} confidence</div>
+        ${nlpBadge(pr.nlp_source)}</div>` : ""}
     </div>`;
   }).join("");
 }
@@ -117,15 +209,15 @@ function renderRows() {
     const shown = r.assigned_esi || r.esi;
     const cls = r.assigned_esi ? shown : "none";
     let act;
-    if (r.status === "in-treatment") act = `<span class="pill">IN TREATMENT</span>`;
-    else if (r.pending) act = `<button class="mini act" data-open="${r.id}">REVIEW</button>`;
-    else act = `<button class="mini ok" data-admit="${r.id}">MOVE TO BED</button>`;
+    if (r.status === "in-treatment") act = `<span class="pill">In treatment</span>`;
+    else if (r.pending) act = `<button class="mini act" data-open="${r.id}">Review</button>`;
+    else act = `<button class="mini ok" data-admit="${r.id}">Move to bed</button>`;
 
     return `<div class="row ${alert ? "alert" : ""} ${r.status === "in-treatment" ? "treat" : ""}" data-open="${r.id}">
-      <div><div class="pid">${esc(r.display_id)}</div><div class="page">age ${r.age} · ${esc(r.arrival_mode)}</div></div>
+      <div><div class="pid">${esc(r.display_id)}</div><div class="page">${r.age != null ? "age " + r.age : "age unknown"} · ${esc(r.arrival_mode)}</div></div>
       <div class="comp">${esc(r.complaint)}</div>
       <div class="esi ${cls}">${r.assigned_esi ? shown : "—"}</div>
-      <div class="ari" style="color:${r.ari >= 68 ? "#FF3B5C" : r.ari >= 40 ? "#FFA828" : "#12D08A"}">${r.ari}</div>
+      <div class="ari" style="color:${r.ari >= 68 ? "#B23B54" : r.ari >= 40 ? "#9C6B22" : "#3F8A6C"}">${r.ari}</div>
       <div>${spark(r.trace, r.trend && r.trend.rising)}</div>
       <div class="wait">${Math.round(r.waited)}m</div>
       <div class="rowact">${act}</div>
@@ -165,8 +257,8 @@ function renderModel() {
   const m = STATE.model;
   $("#model").innerHTML = `
     <div class="mstat"><div class="v">${m.roc_auc}</div><div class="k">ROC-AUC</div></div>
-    <div class="mstat"><div class="v">${(m.sensitivity * 100).toFixed(1)}%</div><div class="k">sensitivity <span style="color:#6D558C">(ESI: 65.9%)</span></div></div>
-    <div class="mstat"><div class="v">${(m.undertriage_rate * 100).toFixed(1)}%</div><div class="k">under-triage <span style="color:#6D558C">(ESI: 3.3%)</span></div></div>
+    <div class="mstat"><div class="v">${(m.sensitivity * 100).toFixed(1)}%</div><div class="k">sensitivity <span style="color:#7A6893">(ESI: 65.9%)</span></div></div>
+    <div class="mstat"><div class="v">${(m.undertriage_rate * 100).toFixed(1)}%</div><div class="k">under-triage <span style="color:#7A6893">(ESI: 3.3%)</span></div></div>
     <div class="mstat"><div class="v">${m.n_test.toLocaleString()}</div><div class="k">held-out encounters</div></div>`;
 }
 
@@ -177,8 +269,8 @@ function renderDrawer(id) {
   OPEN = id;
   $("#drawer").classList.add("on");
   $("#scrim").classList.add("on");
-  $("#dTag").textContent = `${r.arrival_mode.toUpperCase()} · WAITING ${Math.round(r.waited)} MIN`;
-  $("#dName").textContent = `${r.display_id} · age ${r.age}`;
+  $("#dTag").textContent = `${cap(r.arrival_mode)} · waiting ${Math.round(r.waited)} min`;
+  $("#dName").textContent = `${r.display_id} · ${r.age != null ? "age " + r.age : "age unknown"}`;
 
   const V = r.vitals || {};
   const vitalDef = [
@@ -187,14 +279,14 @@ function renderDrawer(id) {
     ["SpO₂", "spo2", "%", v => v < 93],
     ["RR", "resp_rate", "/min", v => v > 22],
     ["DBP", "diastolic_bp", "mmHg", v => v < 60],
-    ["TEMP", "temperature", "°C", v => v > 38 || v < 35.5],
+    ["Temp", "temperature", "°C", v => v > 38 || v < 35.5],
   ];
   const vitalsHtml = vitalDef.map(([k, key, u, bad]) => {
     const v = V[key];
     if (v === undefined || v === null)
       return `<div class="vc missing"><div class="k">${k}</div><div class="v">not taken</div></div>`;
     return `<div class="vc ${bad(v) ? "bad" : ""}"><div class="k">${k}</div>
-      <div class="v">${v}<span style="font-size:9px;color:#6D558C"> ${u}</span></div></div>`;
+      <div class="v">${v}<span style="font-size:10px;color:#7A6893"> ${u}</span></div></div>`;
   }).join("");
 
   const maxAbs = Math.max(...r.drivers.map(d => Math.abs(d.contribution)), 0.01);
@@ -216,43 +308,45 @@ function renderDrawer(id) {
   }
 
   const trendHtml = r.trend && r.trend.reason
-    ? `<div class="sec"><h4>LAYER 4 · DETERIORATION ENGINE</h4>
-        <div class="quote" style="border-left-color:${r.trend.rising ? "#FF3B5C" : "#A100FF"}">
+    ? `<div class="sec"><h4>Layer 4 · Deterioration engine</h4>
+        <div class="quote" style="border-left-color:${r.trend.rising ? "#B23B54" : "#7A45CE"}">
           ${r.trend.trace ? r.trend.trace.map(v => `<b>${v}</b>`).join(" → ") + "<br>" : ""}
           ${esc(r.trend.reason)}</div></div>` : "";
 
   const gate = r.pending ? `
     <div class="gate">
-      <div class="g">● HUMAN DECISION GATE</div>
+      <div class="g">● Human decision gate</div>
       <div class="rec">PULSE recommends<br>
         <b>ESI ${r.esi}</b> — ${r.confidence} confidence<br>
         <b>${esc(r.routing.pathway)}</b><br>
         <b>${esc(r.routing.specialty)}</b>${r.routing.specialist_available ? "" : " — page required"}</div>
       ${r.routing.notes.length ? `<div class="note">${r.routing.notes.map(esc).join(" · ")}</div>` : ""}
       <div class="gbtns">
-        <button class="acc" data-decide="${r.id}|accept">ACCEPT</button>
-        <button class="ovr" data-decide="${r.id}|override">OVERRIDE</button>
+        <button class="acc" data-decide="${r.id}|accept">Accept</button>
+        <button class="ovr" data-decide="${r.id}|override">Override</button>
       </div>
       <div class="note">Overrides are logged. PULSE never sets acuity itself.</div>
     </div>`
-    : `<div class="gate" style="border-color:rgba(18,208,138,.4);background:rgba(18,208,138,.05)">
-        <div class="g" style="color:#12D08A">● NO OPEN RECOMMENDATION</div>
+    : `<div class="gate" style="border-color:rgba(63,138,108,.35);background:rgba(63,138,108,.05)">
+        <div class="g" style="color:#3F8A6C">● No open recommendation</div>
         <div class="rec">Assigned <b>ESI ${r.assigned_esi || "—"}</b> by the nurse.<br>
           Routed to <b>${esc(r.pathway)}</b>.<br>
           PULSE continues re-scoring while this patient waits.</div></div>`;
 
   $("#dBody").innerHTML = `
-    <div class="sec"><h4>PRESENTING COMPLAINT · LAYER 2 EXTRACTION</h4>
+    ${r.transcript && r.arrival_mode === "voice intake" ? `<div class="sec"><h4>Original account · as spoken</h4>
+      <div class="quote" style="border-left-color:#3F8A6C;font-style:italic">${esc(r.transcript)}</div></div>` : ""}
+    <div class="sec"><h4>Presenting complaint · Layer 2 extraction ${nlpBadge(r.nlp_source)}</h4>
       <div class="quote">${complaint}</div></div>
-    ${r.prior ? `<div class="sec"><h4>LAYER 0 · PRE-ARRIVAL PRIOR</h4>
-      <div class="quote" style="border-left-color:#FFA828">Prior <b>${r.prior.prior}</b>
+    ${r.prior ? `<div class="sec"><h4>Layer 0 · Pre-arrival prior</h4>
+      <div class="quote" style="border-left-color:#9C6B22">Prior <b>${r.prior.prior}</b>
       (${r.prior.confidence} confidence, provisional). Superseded on arrival —
       it now contributes a decayed fraction of the fused score.</div></div>` : ""}
-    <div class="sec"><h4>VITALS · ${r.vitals_present} OF 6 RECORDED</h4>
+    <div class="sec"><h4>Vitals · ${r.vitals_present} of 6 recorded</h4>
       <div class="vgrid">${vitalsHtml}</div>
       ${r.vitals_present < 3 ? `<div class="note">Fewer than three vitals recorded — PULSE flags this score as extrapolated rather than returning a confident-looking number.</div>` : ""}
     </div>
-    <div class="sec"><h4>ARRIVAL RISK INDEX · ${r.ari} → ESI ${r.esi}</h4>
+    <div class="sec"><h4>Arrival risk index · ${r.ari} → ESI ${r.esi}</h4>
       ${driversHtml}
       <div class="note">Exact SHAP contributions from the Layer 1 model, not a proxy.</div>
     </div>

@@ -9,54 +9,81 @@
 <body>
 
 <header class="top">
-  <div class="brand"><b>PULSE</b><span>TRIAGE CO-PILOT</span></div>
+  <div class="brand"><b>PULSE</b><span>Triage co-pilot</span></div>
   <div class="legend">
     <span class="dot green"></span>PULSE decides
     <span class="dot red"></span>Nurse decides
   </div>
   <div class="ctrl">
-    <span class="tag">SPEED</span>
+    <span class="tag">Speed</span>
     <button data-speed="1x">1×</button>
     <button data-speed="10x">10×</button>
     <button data-speed="60x" class="on">60×</button>
     <button data-speed="180x">180×</button>
-    <button id="pause" class="wide">PAUSE</button>
-    <button id="reset" class="wide">RESET</button>
+    <button id="pause" class="wide">Pause</button>
+    <button id="reset" class="wide">Reset</button>
   </div>
   <div class="clock" id="clock">--:--</div>
 </header>
 
 <div class="inbound" id="inboundWrap">
   <div class="inbound-hd">
-    <span class="l0">LAYER 0</span>
-    <b>PRE-ARRIVAL SIGNAL</b>
+    <span class="l0">Layer 0</span>
+    <b>Pre-arrival signal</b>
     <span class="sub">Scored before the patient reaches the door · provisional, never an acuity level</span>
   </div>
   <div id="inbound" class="inbound-body"></div>
+</div>
+
+<div class="voice" id="voiceWrap">
+  <div class="voice-hd">
+    <span class="l0 v">Voice intake</span>
+    <b>Speak for a patient who doesn't share your language</b>
+    <span class="sub">Translates &amp; extracts on the fly · needs the LLM tier on</span>
+  </div>
+  <div class="voice-body">
+    <div class="voice-ctrl">
+      <select id="voiceLang">
+        <option value="en-US">English</option>
+        <option value="hi-IN">Hindi</option>
+        <option value="bn-IN">Bengali</option>
+        <option value="es-ES">Spanish</option>
+        <option value="fr-FR">French</option>
+        <option value="ar-SA">Arabic</option>
+        <option value="zh-CN">Mandarin</option>
+        <option value="pt-BR">Portuguese</option>
+        <option value="ru-RU">Russian</option>
+      </select>
+      <button id="micBtn" class="mic">🎤 Start</button>
+      <button id="voiceSend" class="mini ok">Send to PULSE</button>
+    </div>
+    <textarea id="voiceText" placeholder="Transcript appears here as you speak — or just type it directly."></textarea>
+    <div id="voiceStatus" class="voice-status"></div>
+  </div>
 </div>
 
 <main class="grid">
 
   <section class="panel board">
     <div class="ph">
-      <b>LIVE BOARD</b>
+      <b>Live board</b>
       <span class="sub" id="boardCount"></span>
     </div>
     <div class="thead">
-      <span>PATIENT</span><span>PRESENTING</span><span>ESI</span>
-      <span>ARI</span><span>TREND</span><span>WAIT</span><span></span>
+      <span>Patient</span><span>Presenting</span><span>ESI</span>
+      <span>ARI</span><span>Trend</span><span>Wait</span><span></span>
     </div>
     <div id="rows" class="rows"></div>
   </section>
 
   <aside class="col">
     <section class="panel">
-      <div class="ph"><b>DEPARTMENT STATE</b><span class="sub">Layer 5 routes against this</span></div>
+      <div class="ph"><b>Department state</b><span class="sub">Layer 5 routes against this</span></div>
       <div id="cap" class="cap"></div>
     </section>
 
     <section class="panel">
-      <div class="ph"><b>SHADOW MODE</b><span class="sub">nurse agreement</span></div>
+      <div class="ph"><b>Shadow mode</b><span class="sub">nurse agreement</span></div>
       <div class="agree">
         <div class="big" id="agreeRate">—</div>
         <div class="agree-txt" id="agreeTxt">No decisions yet this shift.</div>
@@ -64,12 +91,12 @@
     </section>
 
     <section class="panel grow">
-      <div class="ph"><b>AUDIT LOG</b><span class="sub">every recommendation &amp; override</span></div>
+      <div class="ph"><b>Audit log</b><span class="sub">every recommendation &amp; override</span></div>
       <div id="events" class="events"></div>
     </section>
 
     <section class="panel">
-      <div class="ph"><b>LAYER 1 MODEL</b><span class="sub">held-out test set</span></div>
+      <div class="ph"><b>Layer 1 model</b><span class="sub">held-out test set</span></div>
       <div id="model" class="model"></div>
     </section>
   </aside>
@@ -78,7 +105,7 @@
 <div class="drawer" id="drawer">
   <div class="dhead">
     <div>
-      <div class="tag" id="dTag">PATIENT</div>
+      <div class="tag" id="dTag">Patient</div>
       <h2 id="dName">—</h2>
     </div>
     <button id="dClose">✕</button>

@@ -13,4 +13,5 @@ def score(complaint: str) -> dict[str, Any]:
         "flags": nlp["flags"],
         "spans": nlp["spans"],
         "systems": nlp["systems"],
+        "nlp_source": nlp.get("source", "lexicon"),
     }

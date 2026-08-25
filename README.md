@@ -21,6 +21,10 @@ git clone <this repo> && cd pulse
 Then open **http://127.0.0.1:8000**. First run trains the Layer 1 model
 (~20 seconds); after that it starts immediately.
 
+Runs fully offline by default. To turn on the LLM NLP tier (and the Voice Intake
+panel, which needs it): `cp .env.example .env`, fill in `GEMINI_API_KEY` and/or
+`GROQ_API_KEY` (both have a free tier), set `PULSE_NLP_MODE=llm`.
+
 The department is simulated and the clock runs on its own. Use the speed control
 in the header — **60×** is right for watching, **180×** for a quick pass.
 
@@ -128,10 +132,33 @@ polling fallback.
 
 **Stubbed, deliberately:** bed and staffing data are simulated in-process (a real
 deployment reads these from the hospital's system) · patient arrivals and vitals come
-from `simulation.py` rather than live monitors · speech-to-text is pre-transcribed, so
-Layer 0 starts from text · the LLM extractor described in the concept deck falls back
-here to the deterministic lexicon matcher in `layers/nlp_core.py`, which is the same
-failover path that keeps PULSE working offline.
+from `simulation.py` rather than live monitors · the scripted ambulance call's
+speech-to-text is pre-transcribed, so Layer 0 starts from text for that scenario
+patient specifically — Voice Intake (below) does real, live browser speech-to-text.
+
+**Red-flag extraction (Layers 0 and 2) is a genuine three-tier failover**, in
+`layers/nlp_core.py`: Gemini (`layers/nlp_llm.py`), grounded on
+`data/clinical_lexicon.json`'s closed vocabulary, is tried first; if it's
+unconfigured or fails, Groq — a second vendor, so one provider's outage doesn't
+sink the demo — is tried next; the deterministic lexicon matcher underneath both is
+the guaranteed fallback, the same path that keeps PULSE working fully offline. Both
+LLM tiers are off by default (`PULSE_NLP_MODE=lexicon`); set `PULSE_NLP_MODE=llm`
+and at least one of `GEMINI_API_KEY` / `GROQ_API_KEY` to turn them on. Whichever
+tier actually answered is stamped on the result (`llm-gemini` / `llm-groq` /
+`lexicon`) and shown on the console as a small badge, so the failover is something
+you can watch happen rather than a line in this README. Regenerate the agreement
+numbers with `python -m backend.ml.eval_nlp`.
+
+**Voice Intake** is the demoable form of "the nurse and the patient (or the person who
+brought them) don't share a language." A mic panel on the console records speech in
+the browser (Web Speech API — audio never leaves the machine), and the recognised
+text, in whatever language, goes to `POST /api/voice-intake`. The LLM translates it
+into a chart-style English chief complaint, pulls out age and any vital-sign *numbers
+actually spoken aloud* (never inferred from a description), and a new patient appears
+on the board, already through Layer 2, fusion and routing, waiting on the same human
+decision gate as everyone else. It needs the LLM tier — there's no lexicon fallback
+for translation — and says so plainly if it isn't configured, rather than silently
+extracting nothing useful from non-English text.
 
 ---
 
@@ -144,6 +171,7 @@ failover path that keeps PULSE working offline.
 | `POST /api/decide/{id}/accept` | Nurse accepts the recommendation |
 | `POST /api/decide/{id}/override?esi=III` | Nurse overrides — logged |
 | `POST /api/admit/{id}` | Move patient to their bed |
+| `POST /api/voice-intake` | Voice Intake — `{transcript, lang}` in, a new patient scored and queued out. Requires the LLM tier |
 | `POST /api/control/speed?value=60x` | Simulation speed |
 | `POST /api/control/pause` · `/reset` | Clock control |
 | `GET /api/audit` | Decision log and agreement rate |

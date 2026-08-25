@@ -6,3 +6,4 @@ pulse.db
 .DS_Store
 .idea/
 .vscode/
+.env
