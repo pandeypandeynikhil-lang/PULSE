@@ -1,0 +1,1 @@
+"""Local laboratory report extraction."""

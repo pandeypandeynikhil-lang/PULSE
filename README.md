@@ -13,26 +13,55 @@ patient is waiting.
 
 ## Run it
 
-```bash
-git clone <this repo> && cd pulse
-./run.sh          # Windows: run.bat
+Start the backend and frontend in separate terminals.
+
+**Terminal 1 - backend (Windows):**
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r backend/requirements.txt
+if (!(Test-Path backend/ml/artifacts/vitals_model.pkl)) { python -m backend.ml.train }
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
-Then open **http://127.0.0.1:8000**. First run trains the Layer 1 model
+**Terminal 1 - backend (macOS/Linux):**
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r backend/requirements.txt
+[ -f backend/ml/artifacts/vitals_model.pkl ] || python -m backend.ml.train
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+```
+
+**Terminal 2 - frontend:**
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Then open **http://localhost:3000**. First run trains the Layer 1 model
 (~20 seconds); after that it starts immediately.
+
+Use **Patient Intake** at `/intake` to enter demographics, vitals, dictated
+clinical notes, and sequentially upload editable PDF lab reports. Use
+**Triage Dashboard** at `/dashboard` for the live operational board, department
+state, shadow-mode agreement, and audit log.
 
 Runs fully offline by default. To turn on the LLM NLP tier (and the Voice Intake
 panel, which needs it): `cp .env.example .env`, fill in `GEMINI_API_KEY` and/or
 `GROQ_API_KEY` (both have a free tier), set `PULSE_NLP_MODE=llm`.
 
-The department is simulated and the clock runs on its own. Use the speed control
-in the header — **60×** is right for watching, **180×** for a quick pass.
+The department is simulated continuously. Reset the simulation from the header
+when needed.
 
 ### What to watch for
 
 | Time | What happens |
 |---|---|
-| ~17:43 | **Layer 0** scores the inbound ambulance call before the patient arrives, and pre-positions a bay, an ECG and cardiology |
 | ~17:51 | PT 12 arrives. Vitals stream in, the ARI resolves, the console asks the nurse to confirm |
 | ~18:12 | **PT 11 escalates on trajectory alone** — triaged ESI IV over an hour ago, complaint never revealed anything, but the risk curve crossed a tier boundary |
 
@@ -59,9 +88,8 @@ anywhere in the codebase.
 ```
   SIGNALS IN            PERCEPTION              REASONING            ACTION · HUMAN GATE
   ──────────            ──────────              ─────────            ───────────────────
-  ambulance audio  ──▶  L0 pre-arrival NLP ──┐
-  chief complaint  ──▶  L2 symptom NLP     ──┼──▶  L3 fusion → ARI ──▶  nurse console
-  vitals stream    ──▶  L1 vitals model    ──┘         ▲    │           (accept / override)
+  chief complaint  ──▶  L2 symptom NLP     ──┐
+  vitals stream    ──▶  L1 vitals model    ──┼──▶  L3 fusion → ARI ──▶  nurse console
   prior records    ──▶                                 │    ▼                  │
   live ED state    ──────────────────────────▶  L4 deterioration        L5 routing → bed
                                                     (re-score loop)      + specialist
@@ -71,7 +99,6 @@ anywhere in the codebase.
 
 | Layer | File | What it does |
 |---|---|---|
-| **0** | `layers/layer0_prearrival.py` | Scores the ambulance/helpline call. Emits a **provisional prior**, capped below ESI-II equivalence, that may move resources and nothing else |
 | **1** | `layers/layer1_vitals.py` | XGBoost on whatever vitals exist. Missing fields stay `NaN` — never imputed and passed off as measured |
 | **2** | `layers/layer2_symptom_nlp.py` | Red-flag extraction from the chief complaint, returning the **exact spans** that matched |
 | **3** | `layers/layer3_fusion.py` | Transparent weighted fusion into the Arrival Risk Index, mapped to ESI I–V with a confidence band |
@@ -133,8 +160,7 @@ polling fallback.
 **Stubbed, deliberately:** bed and staffing data are simulated in-process (a real
 deployment reads these from the hospital's system) · patient arrivals and vitals come
 from `simulation.py` rather than live monitors · the scripted ambulance call's
-speech-to-text is pre-transcribed, so Layer 0 starts from text for that scenario
-patient specifically — Voice Intake (below) does real, live browser speech-to-text.
+Voice Intake does real, live browser speech-to-text.
 
 **Red-flag extraction (Layers 0 and 2) is a genuine three-tier failover**, in
 `layers/nlp_core.py`: Gemini (`layers/nlp_llm.py`), grounded on
@@ -172,7 +198,8 @@ extracting nothing useful from non-English text.
 | `POST /api/decide/{id}/override?esi=III` | Nurse overrides — logged |
 | `POST /api/admit/{id}` | Move patient to their bed |
 | `POST /api/voice-intake` | Voice Intake — `{transcript, lang}` in, a new patient scored and queued out. Requires the LLM tier |
-| `POST /api/control/speed?value=60x` | Simulation speed |
+| `POST /api/extract-lab` | PDF lab report upload — returns structured demographics and `test_results`; requires Docling and Ollama |
+| `POST /api/ari` | Calculates an ARI preview from the reviewed intake payload |
 | `POST /api/control/pause` · `/reset` | Clock control |
 | `GET /api/audit` | Decision log and agreement rate |
 | `GET /api/model` | Layer 1 metrics |
@@ -188,7 +215,10 @@ backend/
   simulation.py      Simulated department and patient physiology
   layers/            The six layers, one file each
   ml/train.py        Model training
-frontend/            Single-screen nurse console (no build step)
+frontend/            Next.js + TypeScript nurse console
+  app/               App Router entry point and global styles
+  components/        Navigation, dashboard, board, intake and drawer components
+  lib/               Typed API client and shared domain models
 data/
   clinical_lexicon.json   Red-flag rubric shared by Layers 0 and 2
 docs/ARCHITECTURE.md

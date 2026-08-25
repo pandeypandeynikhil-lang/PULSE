@@ -10,8 +10,10 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import logging
 import os
 import time
+from datetime import datetime
 from typing import Any
 
 from dotenv import load_dotenv
@@ -20,22 +22,31 @@ load_dotenv()  # reads .env into os.environ, if present — before anything
                # below reads GEMINI_API_KEY / GROQ_API_KEY / PULSE_NLP_MODE.
                # Safe no-op if there is no .env: PULSE runs offline by default.
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
-from . import db, simulation
-from .layers import (layer0_prearrival, layer1_vitals, layer2_symptom_nlp,
-                     layer3_fusion, layer4_deterioration, layer5_routing)
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-FRONTEND = os.path.join(HERE, "..", "frontend")
+try:
+    from . import db, simulation
+    from .layers import (layer1_vitals, layer2_symptom_nlp,
+                         layer3_fusion, layer4_deterioration, layer5_routing)
+except ImportError:
+    # Supports `uvicorn main:app` when the working directory is backend/.
+    import db  # type: ignore[no-redef]
+    import simulation  # type: ignore[no-redef]
+    from layers import (layer1_vitals, layer2_symptom_nlp,
+                        layer3_fusion, layer4_deterioration, layer5_routing)
 
 TICK_SECONDS = 1.0          # wall-clock cadence of the scheduler
-START_CLOCK = 17 * 60 + 42  # the shift starts at 17:42, as in the film
-
 app = FastAPI(title="PULSE", version="0.1.0")
+logger = logging.getLogger(__name__)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class Engine:
@@ -45,8 +56,6 @@ class Engine:
         self.conn = db.init(reset=True)
         self.patients: list[simulation.SimPatient] = []
         self.sim_minutes = 0.0
-        self.speed = 60
-        self.running = True
         self.clients: set[WebSocket] = set()
         self.capacity = copy.deepcopy(simulation.BASE_CAPACITY)
         self.events: list[dict[str, Any]] = []
@@ -73,22 +82,16 @@ class Engine:
                 "status": p.status, "assigned_esi": p.assigned_esi})
 
     def log(self, kind: str, text: str, patient: str | None = None) -> None:
-        self.events.insert(0, {"at": self.clock(), "kind": kind,
+        self.events.insert(0, {"at": datetime.now().strftime("%H:%M:%S"), "kind": kind,
                                "text": text, "patient": patient})
         del self.events[40:]
-
-    def clock(self) -> str:
-        total = int(START_CLOCK + self.sim_minutes)
-        return f"{(total // 60) % 24:02d}:{total % 60:02d}"
 
     # ------------------------------------------------------------- pipeline
     def score_patient(self, p: simulation.SimPatient) -> dict[str, Any] | None:
         symptom = layer2_symptom_nlp.score(p.complaint or "")
         vitals_raw = p.vitals_at(self.sim_minutes)
         vitals_out = layer1_vitals.score(vitals_raw) if vitals_raw else None
-        prior = p.prior["prior"] if p.prior else None
-
-        fused = layer3_fusion.fuse(vitals_out, symptom, prior, p.age)
+        fused = layer3_fusion.fuse(vitals_out, symptom, p.age)
 
         # Persist a score when it actually says something new, or every few
         # simulated minutes. Writing one row per tick would bury the trajectory
@@ -103,8 +106,7 @@ class Engine:
         history = db.score_history(self.conn, p.id)
         waited = (self.sim_minutes - (p.arrived_at_min or 0))
         trend = layer4_deterioration.assess(history, waited)
-        systems = sorted(set(symptom["systems"]) |
-                         set(p.prior["systems"] if p.prior else []))
+        systems = symptom["systems"]
         routing = layer5_routing.route(fused["esi"], systems, self.capacity)
 
         return {"fused": fused, "vitals": vitals_raw, "vitals_out": vitals_out,
@@ -113,22 +115,10 @@ class Engine:
 
     # ----------------------------------------------------------------- tick
     async def tick(self) -> None:
-        if not self.running:
-            return
-        self.sim_minutes += (self.speed * TICK_SECONDS) / 60.0
+        self.sim_minutes += (60 * TICK_SECONDS) / 60.0
         t = self.sim_minutes
 
         for p in self.patients:
-            # Layer 0 fires before arrival for anyone who called ahead.
-            if (p.transcript and p.prior is None
-                    and p.prearrival_min is not None and t >= p.prearrival_min):
-                p.prior = layer0_prearrival.score(p.transcript, p.arrival_mode)
-                self.log("layer0",
-                         f"Pre-arrival prior {p.prior['prior']} "
-                         f"({p.prior['confidence']} confidence) — "
-                         f"{len(p.prior['actions'])} resources pre-positioned",
-                         p.display_id)
-
             if p.status == "inbound" and t >= p.arrive_min:
                 p.status = "waiting"
                 p.arrived_at_min = p.arrive_min
@@ -215,9 +205,7 @@ class Engine:
     async def create_voice_patient(self, transcript: str, lang: str) -> dict[str, Any]:
         """A spoken account from a patient or companion who doesn't share a
         language with the nurse becomes a new patient on the board — the same
-        "provisional signal before the usual data exists" idea as Layer 0,
-        just triggered live from the console instead of from a scripted
-        ambulance call.
+        triggered live from the console instead of from the scripted scenario.
 
         Requires the LLM tier: the deterministic lexicon can't translate, and
         limping along on an English-only regex match against foreign text
@@ -228,8 +216,10 @@ class Engine:
         if not transcript:
             return {"ok": False, "error": "Nothing to send yet."}
 
-        from .layers import nlp_llm  # local import: gemini/groq SDKs stay
-                                      # optional unless the LLM tier is on
+        try:
+            from .layers import nlp_llm  # local import: optional LLM SDKs
+        except ImportError:
+            from layers import nlp_llm  # type: ignore[no-redef]
         if (os.environ.get("PULSE_NLP_MODE") != "llm"
                 or not nlp_llm.any_provider_configured()):
             return {"ok": False, "error": ("Voice intake needs the LLM tier — "
@@ -280,15 +270,10 @@ class Engine:
 
     # --------------------------------------------------------------- output
     def board(self) -> dict[str, Any]:
-        rows, inbound = [], []
+        rows = []
         for p in self.patients:
             res = getattr(p, "_last", None)
             if p.status == "inbound":
-                inbound.append({
-                    "id": p.id, "display_id": p.display_id, "age": p.age,
-                    "eta_min": round(max(0.0, p.arrive_min - self.sim_minutes), 1),
-                    "complaint": p.complaint, "transcript": p.transcript,
-                    "prior": p.prior})
                 continue
             if res is None:
                 continue
@@ -311,17 +296,13 @@ class Engine:
                 "vitals_present": res["vitals_out"]["vitals_present"] if res["vitals_out"] else 0,
                 "spans": res["symptom"]["spans"],
                 "nlp_source": res["symptom"].get("nlp_source", "lexicon"),
-                "prior": p.prior,
             })
 
         order = {"I": 0, "II": 1, "III": 2, "IV": 3, "V": 4, None: 5}
         rows.sort(key=lambda r: (order.get(r["assigned_esi"] or r["esi"], 5), -r["ari"]))
-        inbound.sort(key=lambda r: r["eta_min"])
-
         return {
-            "clock": self.clock(), "sim_minutes": round(self.sim_minutes, 1),
-            "speed": self.speed, "running": self.running,
-            "rows": rows, "inbound": inbound, "capacity": self.capacity,
+            "sim_minutes": round(self.sim_minutes, 1),
+            "rows": rows, "capacity": self.capacity,
             "events": self.events[:14],
             "agreement": db.agreement_rate(self.conn),
             "model": layer1_vitals.model_metrics(),
@@ -351,7 +332,10 @@ class Engine:
         when a demo starts. No-op if the LLM tier is off."""
         if os.environ.get("PULSE_NLP_MODE") != "llm":
             return
-        from .layers import nlp_core
+        try:
+            from .layers import nlp_core
+        except ImportError:
+            from layers import nlp_core  # type: ignore[no-redef]
         texts = {p.complaint for p in self.patients if p.complaint}
         texts |= {p.transcript for p in self.patients if p.transcript}
         loop = asyncio.get_running_loop()
@@ -424,12 +408,105 @@ class VoiceIntakeIn(BaseModel):
     lang: str = "en-US"
 
 
+class ARIIn(BaseModel):
+    age_years: int | None = None
+    complaint: str = ""
+    nursing_assessment: str = ""
+    vitals: dict[str, Any] = Field(default_factory=dict)
+    test_results: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class PersonalDetailsIn(BaseModel):
+    name: str = ""
+    age_years: int | None = Field(default=None, ge=0, le=150)
+    sex: str = ""
+    referred_by: str = ""
+    registration_no: str = ""
+    report_date: str = ""
+
+
+class PresentationIn(BaseModel):
+    complaint: str = ""
+    nursing_assessment: str = ""
+
+
+class LaboratoryIn(BaseModel):
+    test_results: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class IntakeIn(BaseModel):
+    personal_details: PersonalDetailsIn = Field(default_factory=PersonalDetailsIn)
+    presentation: PresentationIn = Field(default_factory=PresentationIn)
+    vitals: dict[str, Any] = Field(default_factory=dict)
+    laboratory: LaboratoryIn = Field(default_factory=LaboratoryIn)
+
+
 @app.post("/api/voice-intake")
 async def api_voice_intake(body: VoiceIntakeIn):
     out = await engine.create_voice_patient(body.transcript, body.lang)
+    print("voice intake:", out)
     if out.get("ok"):
         await engine.broadcast()
     return JSONResponse(out)
+
+
+@app.post("/api/ari")
+async def api_ari(body: ARIIn):
+    """Calculate an ARI preview for a reviewed intake payload."""
+    complaint = " ".join(filter(None, (body.complaint, body.nursing_assessment)))
+    symptom = layer2_symptom_nlp.score(complaint)
+    vitals = dict(body.vitals)
+    vitals["age"] = body.age_years
+    vitals["arrival_mode"] = "walk-in"
+    vitals_out = layer1_vitals.score(vitals)
+    fused = layer3_fusion.fuse(vitals_out, symptom, body.age_years)
+    return JSONResponse({"ari": fused["ari"], "esi": fused["esi"], "confidence": fused["confidence"]})
+
+
+@app.post("/api/intake")
+async def api_intake(body: IntakeIn):
+    """Accept the complete, organised patient intake and calculate its ARI."""
+    complaint = " ".join(filter(None, (
+        body.presentation.complaint, body.presentation.nursing_assessment)))
+    symptom = layer2_symptom_nlp.score(complaint)
+    vitals = dict(body.vitals)
+    vitals["age"] = body.personal_details.age_years
+    vitals["arrival_mode"] = "walk-in"
+    vitals_out = layer1_vitals.score(vitals)
+    fused = layer3_fusion.fuse(
+        vitals_out, symptom, body.personal_details.age_years)
+    return JSONResponse({
+        "ari": fused["ari"], "esi": fused["esi"],
+        "confidence": fused["confidence"],
+    })
+
+
+@app.post("/api/extract-lab")
+async def api_extract_lab(file: UploadFile = File(...)):
+    """Extract structured demographics and test results from a PDF report."""
+    if file.content_type != "application/pdf":
+        raise HTTPException(status_code=415, detail="Only PDF files are supported.")
+
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="The uploaded PDF is empty.")
+
+    try:
+        try:
+            from .lab.pipeline import extract_lab_report
+        except ImportError:
+            from lab.pipeline import extract_lab_report  # type: ignore[no-redef]
+
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, extract_lab_report, contents)
+    except Exception as error:
+        logger.exception("Lab report extraction failed")
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unable to extract the lab report ({type(error).__name__}): {error}",
+        ) from error
+
+    return JSONResponse(result.model_dump(mode="json"))
 
 
 @app.post("/api/admit/{patient_id}")
@@ -441,16 +518,11 @@ async def api_admit(patient_id: str):
 
 @app.post("/api/control/{what}")
 async def api_control(what: str, value: str | None = None):
-    if what == "speed" and value:
-        engine.speed = simulation.SPEEDS.get(value, 60)
-    elif what == "pause":
-        engine.running = not engine.running
-    elif what == "reset":
+    if what == "reset":
         engine.reset()
         await engine.prewarm_nlp()
     await engine.broadcast()
-    return JSONResponse({"ok": True, "speed": engine.speed,
-                         "running": engine.running})
+    return JSONResponse({"ok": True})
 
 
 @app.get("/api/audit")
@@ -464,9 +536,3 @@ async def api_model():
     return JSONResponse(layer1_vitals.model_metrics())
 
 
-app.mount("/static", StaticFiles(directory=FRONTEND), name="static")
-
-
-@app.get("/")
-async def index():
-    return FileResponse(os.path.join(FRONTEND, "index.html"))

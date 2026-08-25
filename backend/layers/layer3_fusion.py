@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-W_VITALS, W_SYMPTOM, W_PRIOR, W_AGE = 0.46, 0.34, 0.12, 0.08
+W_VITALS, W_SYMPTOM, W_AGE = 0.46, 0.34, 0.08
 
 # ESI runs I (most urgent) to V. We map onto it rather than inventing our own
 # scale, so the output lands in the vocabulary the department already uses.
@@ -25,7 +25,6 @@ def _band(ari: int) -> str:
 
 def fuse(vitals_out: dict[str, Any] | None,
          symptom_out: dict[str, Any] | None,
-         prior: int | None,
          age: int | None) -> dict[str, Any]:
     parts, weights = [], []
 
@@ -39,12 +38,6 @@ def fuse(vitals_out: dict[str, Any] | None,
     if symptom_out and symptom_out.get("flags"):
         parts.append(symptom_out["severity"] * 100)
         weights.append(W_SYMPTOM)
-    if prior is not None:
-        # The prior decays as soon as real data lands. It opened the door; it
-        # does not get to stay in the room.
-        decay = 0.35 if vitals_out else 1.0
-        parts.append(prior * decay)
-        weights.append(W_PRIOR)
     if age is not None:
         parts.append(min(max((age - 40) * 1.5, 0), 100))
         weights.append(W_AGE)
@@ -70,7 +63,6 @@ def fuse(vitals_out: dict[str, Any] | None,
         "components": {
             "vitals": round(vitals_out["risk"] * 100, 1) if vitals_out else None,
             "symptoms": round(symptom_out["severity"] * 100, 1) if symptom_out else None,
-            "prior": prior,
             "age": age,
         },
     }

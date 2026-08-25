@@ -1,7 +1,7 @@
 """Simulated emergency department.
 
 PULSE's central claim is that time passes and risk changes. A static demo
-cannot show that, so the whole prototype is built around a running clock.
+cannot show that, so the prototype advances its internal simulation timeline.
 
 Important: the escalations are NOT scripted. The deterioration engine computes
 from the vitals stream like it would in production. What we authored is the
@@ -14,9 +14,6 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field
 from typing import Any
-
-SPEEDS = {"1x": 1, "10x": 10, "60x": 60, "180x": 180}
-
 
 @dataclass
 class VitalsPoint:
@@ -34,7 +31,6 @@ class SimPatient:
     arrive_min: float
     timeline: list[VitalsPoint]
     transcript: str | None = None
-    prearrival_min: float | None = None
     status: str = "inbound"
     assigned_esi: str | None = None
     pathway: str | None = None
@@ -43,7 +39,6 @@ class SimPatient:
     last_recommendation: int | None = None
     escalated: bool = False
     seen_at_min: float | None = None
-    prior: dict[str, Any] | None = None
     seed_esi: str | None = None   # acuity already assigned before the shift
 
     def vitals_at(self, t: float) -> dict[str, Any] | None:
@@ -135,12 +130,6 @@ def _partial_first(points: list[VitalsPoint]) -> list[VitalsPoint]:
     return points
 
 
-CARDIAC_TRANSCRIPT = (
-    "He's 58 - he's clutching his chest, he's grey and he's sweating through "
-    "his shirt. He can't get a full breath. It started about twenty minutes ago."
-)
-
-
 def build_scenario() -> list[SimPatient]:
     rng = random.Random(2026)
     P: list[SimPatient] = []
@@ -174,9 +163,9 @@ def build_scenario() -> list[SimPatient]:
     ))
 
     P.append(SimPatient(
-        id="p12", display_id="PT 12", age=58, arrival_mode="ambulance",
+        id="p12", display_id="PT 12", age=58, arrival_mode="walk-in",
         complaint="crushing central chest pain, sweating, breathless",
-        arrive_min=9.0, prearrival_min=0.5, transcript=CARDIAC_TRANSCRIPT,
+        arrive_min=9.0,
         timeline=_partial_first(_steady(118, 96, 62, 24, 91, 37.1, n=5, step=6, rng=rng)),
     ))
 

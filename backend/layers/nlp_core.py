@@ -1,6 +1,4 @@
-"""Shared red-flag extraction. Used by Layer 0 (pre-arrival audio) and Layer 2
-(in-person chief complaint) — deliberately the same code path, because the
-clinical meaning of "crushing chest pain" does not change with who said it.
+"""Shared red-flag extraction for the in-person chief complaint.
 
 Three tiers, tried in order by `extract()`:
   1. LLM extraction (`nlp_llm.py`), grounded on this lexicon's closed
