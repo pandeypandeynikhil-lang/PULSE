@@ -28,13 +28,14 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 try:
-    from . import db, simulation
+    from . import db, simulation, ward
     from .layers import (layer1_vitals, layer2_symptom_nlp,
                          layer3_fusion, layer4_deterioration, layer5_routing)
 except ImportError:
     # Supports `uvicorn main:app` when the working directory is backend/.
     import db  # type: ignore[no-redef]
     import simulation  # type: ignore[no-redef]
+    import ward  # type: ignore[no-redef]
     from layers import (layer1_vitals, layer2_symptom_nlp,
                         layer3_fusion, layer4_deterioration, layer5_routing)
 
@@ -57,7 +58,8 @@ class Engine:
         self.patients: list[simulation.SimPatient] = []
         self.sim_minutes = 0.0
         self.clients: set[WebSocket] = set()
-        self.capacity = copy.deepcopy(simulation.BASE_CAPACITY)
+        self.beds: list[ward.Bed] = []
+        self.clinicians: list[ward.Clinician] = []
         self.events: list[dict[str, Any]] = []
         self.reset()
 
@@ -66,9 +68,10 @@ class Engine:
         self.conn = db.init(reset=True)
         self.patients = simulation.build_scenario()
         self.sim_minutes = 0.0
-        self.capacity = copy.deepcopy(simulation.BASE_CAPACITY)
+        self.beds, self.clinicians = ward.build_roster()
         self.events = []
-        self.voice_seq = 0  # counts Voice Intake patients created this shift
+        self.voice_seq = 0    # counts Voice Intake patients created this shift
+        self.intake_seq = 0   # counts structured-intake patients this shift
         for p in self.patients:
             if p.arrive_min <= 0:
                 p.status = "waiting"
@@ -107,7 +110,7 @@ class Engine:
         waited = (self.sim_minutes - (p.arrived_at_min or 0))
         trend = layer4_deterioration.assess(history, waited)
         systems = symptom["systems"]
-        routing = layer5_routing.route(fused["esi"], systems, self.capacity)
+        routing = layer5_routing.route(fused["esi"], systems, self.beds, self.clinicians)
 
         return {"fused": fused, "vitals": vitals_raw, "vitals_out": vitals_out,
                 "symptom": symptom, "trend": trend, "routing": routing,
@@ -133,11 +136,10 @@ class Engine:
                 continue
             p._last = res  # noqa: SLF001  cached for the board payload
 
-            if p.status != "waiting":
-                continue
-
             # New patient with no acuity yet -> initial recommendation.
-            if p.assigned_esi is None and p.last_recommendation is None:
+            # Waiting-room only: an in-treatment patient already has one.
+            if (p.status == "waiting" and p.assigned_esi is None
+                    and p.last_recommendation is None):
                 rid = db.add_recommendation(
                     self.conn, p.id, t, "initial", res["fused"]["esi"],
                     res["routing"]["pathway"], res["routing"]["specialty"],
@@ -148,6 +150,11 @@ class Engine:
                          f"→ {res['routing']['pathway']}", p.display_id)
 
             # Already triaged, but trajectory says otherwise -> re-triage.
+            # Deliberately not gated to "waiting": Layer 4 re-scores admitted
+            # patients too, and a patient crashing on the ward after being
+            # placed is the case that matters more, not less, than one still
+            # in the waiting room. Accepting this recommendation reassigns
+            # them to a new bed — see Engine.decide().
             elif (p.assigned_esi and not p.escalated
                     and res["trend"]["escalate"]
                     and _rank(res["fused"]["esi"]) < _rank(p.assigned_esi)):
@@ -167,6 +174,12 @@ class Engine:
     # ------------------------------------------------------------ decisions
     def decide(self, patient_id: str, action: str,
                override_esi: str | None = None) -> dict[str, Any]:
+        """Accept or override a recommendation — and, per the same action,
+        commit to the specific bed and clinician Layer 5 suggested for it.
+        This is the one place `assigned_esi` is written, and now also the
+        one place a bed goes from 'available' to 'occupied': the human
+        decision gate and the resource commitment are the same click.
+        """
         p = next((x for x in self.patients if x.id == patient_id), None)
         if p is None or p.last_recommendation is None:
             return {"ok": False, "error": "no open recommendation"}
@@ -178,16 +191,40 @@ class Engine:
         db.resolve(self.conn, p.last_recommendation, p.id, self.sim_minutes,
                    action, final)
         p.assigned_esi = final
+
+        # An override to a different acuity can change the pathway (a nurse
+        # downgrading to ESI IV should route to fast track, not resus), so
+        # the routing used for accept isn't automatically valid for
+        # override — recompute it against the ESI actually being committed
+        # to rather than reusing the one Layer 3 recommended.
+        if res and action == "accept":
+            routing = res["routing"]
+        elif res:
+            routing = layer5_routing.route(
+                final, res["symptom"]["systems"], self.beds, self.clinicians)
+        else:
+            routing = None
+
         p.last_recommendation = None
-        if res:
-            p.pathway = res["routing"]["pathway"]
-            p.specialty = res["routing"]["specialty"]
-            beds = self.capacity["beds"]
-            if beds.get(p.pathway, 0) > 0:
-                beds[p.pathway] -= 1
+        bed_note = "no bed currently free"
+        if routing:
+            p.pathway, p.specialty = routing["pathway"], routing["specialty"]
+            # Re-escalating an already-admitted patient: free whatever they
+            # occupy before claiming the new assignment, not after — a
+            # patient is never double-booked mid-transition.
+            ward.release_bed_for(self.beds, p.id)
+            ward.release_clinician_for(self.clinicians, p.id)
+            if routing["suggested_bed"]:
+                ward.assign_bed(self.beds, routing["suggested_bed"], p.id)
+                bed_note = f"bed {routing['suggested_bed']} assigned"
+            if routing["suggested_clinician"]:
+                ward.assign_clinician(self.clinicians, routing["suggested_clinician"], p.id)
+
         verb = "accepted" if action == "accept" else f"overrode to ESI {final}"
-        self.log("decision", f"Nurse {verb} for {p.display_id}", p.display_id)
-        return {"ok": True, "final_esi": final}
+        self.log("decision", f"Nurse {verb} for {p.display_id} — {bed_note}",
+                 p.display_id)
+        return {"ok": True, "final_esi": final, "pathway": p.pathway,
+                "bed": routing["suggested_bed"] if routing else None}
 
     def admit(self, patient_id: str) -> dict[str, Any]:
         p = next((x for x in self.patients if x.id == patient_id), None)
@@ -268,6 +305,55 @@ class Engine:
                 "complaint": complaint, "age": age, "vitals": vitals,
                 "provider": provider}
 
+    # ------------------------------------------------------------ intake form
+    def create_intake_patient(self, body: "IntakeIn") -> dict[str, Any]:
+        """The reviewed intake form — personal details, dictated complaint,
+        manually entered vitals, and any lab results pulled from a PDF —
+        becomes a live, queued patient the instant a nurse submits it, not a
+        one-off number handed back to a form. Same Engine, same board, same
+        Layer 4 re-scoring loop as every other arrival: this is what "triage
+        decided simultaneously, ARI calculated, queue precedence decided"
+        means in code, not just in the sentence describing the feature.
+        """
+        complaint = " ".join(filter(None, (
+            body.presentation.complaint, body.presentation.nursing_assessment))).strip()
+        vitals = {k: v for k, v in body.vitals.items() if isinstance(v, (int, float))}
+        if not complaint and not vitals:
+            return {"ok": False, "error": ("Nothing to submit — enter a complaint, "
+                    "vitals, or lab results first.")}
+
+        self.intake_seq += 1
+        pid, display_id = f"intake{self.intake_seq:02d}", f"PT I{self.intake_seq}"
+        age = body.personal_details.age_years
+
+        p = simulation.SimPatient(
+            id=pid, display_id=display_id, age=age, arrival_mode="walk-in",
+            complaint=complaint or "structured intake — see recorded vitals",
+            arrive_min=self.sim_minutes,
+            timeline=[simulation.VitalsPoint(0.0, vitals)])
+        p.status = "waiting"
+        p.arrived_at_min = self.sim_minutes
+        self.patients.append(p)
+
+        db.add_patient(self.conn, {
+            "id": p.id, "display_id": p.display_id, "age": p.age,
+            "arrival_mode": p.arrival_mode, "complaint": p.complaint,
+            "transcript": p.transcript, "arrived_at": p.arrived_at_min,
+            "status": p.status, "assigned_esi": p.assigned_esi})
+
+        # Score immediately rather than waiting for the next tick, so the
+        # nurse who just submitted the form sees the real ARI/queue position
+        # in the same response instead of a blank row for up to a second.
+        res = self.score_patient(p)
+        p._last = res  # noqa: SLF001
+
+        self.log("intake", f"{display_id}: structured intake submitted"
+                 + (f" — ARI {res['fused']['ari']}" if res else ""), display_id)
+        return {"ok": True, "id": pid, "display_id": display_id,
+                "ari": res["fused"]["ari"] if res else None,
+                "esi": res["fused"]["esi"] if res else None,
+                "confidence": res["fused"]["confidence"] if res else None}
+
     # --------------------------------------------------------------- output
     def board(self) -> dict[str, Any]:
         rows = []
@@ -302,7 +388,17 @@ class Engine:
         rows.sort(key=lambda r: (order.get(r["assigned_esi"] or r["esi"], 5), -r["ari"]))
         return {
             "sim_minutes": round(self.sim_minutes, 1),
-            "rows": rows, "capacity": self.capacity,
+            "rows": rows,
+            "capacity": ward.capacity_summary(self.beds, self.clinicians),
+            # Full roster, not just the aggregate above — the Ward Map page
+            # needs individual identities and statuses to draw its
+            # colour-coded boxes; the dashboard's Department State panel
+            # keeps reading the aggregate, so nothing there has to change.
+            "beds": [{"id": b.id, "ward": b.ward, "status": b.status,
+                      "patient_id": b.patient_id} for b in self.beds],
+            "clinicians": [{"id": c.id, "name": c.name, "specialty": c.specialty,
+                            "status": c.status, "patient_id": c.patient_id}
+                           for c in self.clinicians],
             "events": self.events[:14],
             "agreement": db.agreement_rate(self.conn),
             "model": layer1_vitals.model_metrics(),
@@ -465,20 +561,37 @@ async def api_ari(body: ARIIn):
 
 @app.post("/api/intake")
 async def api_intake(body: IntakeIn):
-    """Accept the complete, organised patient intake and calculate its ARI."""
-    complaint = " ".join(filter(None, (
-        body.presentation.complaint, body.presentation.nursing_assessment)))
-    symptom = layer2_symptom_nlp.score(complaint)
-    vitals = dict(body.vitals)
-    vitals["age"] = body.personal_details.age_years
-    vitals["arrival_mode"] = "walk-in"
-    vitals_out = layer1_vitals.score(vitals)
-    fused = layer3_fusion.fuse(
-        vitals_out, symptom, body.personal_details.age_years)
-    return JSONResponse({
-        "ari": fused["ari"], "esi": fused["esi"],
-        "confidence": fused["confidence"],
-    })
+    """Submit the complete, reviewed patient intake — creates a live,
+    queued patient on the board (see Engine.create_intake_patient) rather
+    than only returning a preview number."""
+    out = engine.create_intake_patient(body)
+    if out.get("ok"):
+        await engine.broadcast()
+    return JSONResponse(out)
+
+
+class WardStatusIn(BaseModel):
+    status: str
+
+
+@app.post("/api/ward/beds/{bed_id}/status")
+async def api_bed_status(bed_id: str, body: WardStatusIn):
+    """Direct staff update to a bed's status — the real-time bedding feed
+    requirement. Deliberately can't set 'occupied' this way: that only ever
+    happens through Engine.decide(), tied to the patient it belongs to, so a
+    bed can never show occupied without a patient record behind it."""
+    ok = ward.set_bed_status(engine.beds, bed_id, body.status)
+    if ok:
+        await engine.broadcast()
+    return JSONResponse({"ok": ok})
+
+
+@app.post("/api/ward/clinicians/{clinician_id}/status")
+async def api_clinician_status(clinician_id: str, body: WardStatusIn):
+    ok = ward.set_clinician_status(engine.clinicians, clinician_id, body.status)
+    if ok:
+        await engine.broadcast()
+    return JSONResponse({"ok": ok})
 
 
 @app.post("/api/extract-lab")

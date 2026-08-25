@@ -2,10 +2,11 @@
 
 **Accenture Innovation Challenge 2026 · Problem Statement 2 — PatientTriage.ai**
 
-A triage co-pilot that sits beside the nurse, not in her place. It listens from the
-ambulance call onward, fuses vitals, symptom narrative and live department state into
-one explainable priority signal — and keeps updating that signal for as long as the
-patient is waiting.
+A triage co-pilot that sits beside the nurse, not in her place. It ingests a patient
+the moment they're spoken for, written up, or diagnostically tested — voice, a
+structured intake form, a lab PDF — fuses vitals, symptom narrative and live
+department state into one explainable priority signal, and keeps updating that
+signal, and the bed it points to, for as long as the patient is waiting.
 
 **PULSE never assigns an acuity level. A nurse does. Every time.**
 
@@ -46,10 +47,12 @@ npm run dev
 Then open **http://localhost:3000**. First run trains the Layer 1 model
 (~20 seconds); after that it starts immediately.
 
-Use **Patient Intake** at `/intake` to enter demographics, vitals, dictated
-clinical notes, and sequentially upload editable PDF lab reports. Use
-**Triage Dashboard** at `/dashboard` for the live operational board, department
-state, shadow-mode agreement, and audit log.
+Three pages, one live board underneath all of them: **Patient Intake** (`/intake`)
+enters demographics, vitals, dictated clinical notes, and sequentially uploaded PDF
+lab reports, and submitting puts a real patient on the board. **Triage Dashboard**
+(`/dashboard`) is the live operational board, department state, shadow-mode
+agreement, and audit log. **Ward Map** (`/ward`) is the colour-coded bed and
+clinician roster Layer 5 actually routes against, editable in real time.
 
 Runs fully offline by default. To turn on the LLM NLP tier (and the Voice Intake
 panel, which needs it): `cp .env.example .env`, fill in `GEMINI_API_KEY` and/or
@@ -86,14 +89,15 @@ anywhere in the codebase.
 ## Architecture
 
 ```
-  SIGNALS IN            PERCEPTION              REASONING            ACTION · HUMAN GATE
-  ──────────            ──────────              ─────────            ───────────────────
-  chief complaint  ──▶  L2 symptom NLP     ──┐
-  vitals stream    ──▶  L1 vitals model    ──┼──▶  L3 fusion → ARI ──▶  nurse console
-  prior records    ──▶                                 │    ▼                  │
-  live ED state    ──────────────────────────▶  L4 deterioration        L5 routing → bed
-                                                    (re-score loop)      + specialist
-  ─────────────────────────  GOVERNANCE RAIL  ─────────────────────────────────────────
+  SIGNALS IN                 PERCEPTION              REASONING            ACTION · HUMAN GATE
+  ──────────                 ──────────              ─────────            ───────────────────
+  voice complaint       ──┐
+  intake form vitals    ──┼─▶ L2 symptom NLP    ──┐
+  lab PDF vitals        ──┘   L1 vitals model   ──┼──▶ L3 fusion → ARI ──▶ nurse console
+                                                          │    ▼                  │
+  live bed/clinician roster ───────────────────▶ L4 deterioration       L5 routing → named
+                             (ward.py)              (re-score loop)      bed + clinician
+  ─────────────────────────────  GOVERNANCE RAIL  ─────────────────────────────────────────
   append-only score history · SHAP on every score · audit log · shadow-mode agreement
 ```
 
@@ -103,7 +107,7 @@ anywhere in the codebase.
 | **2** | `layers/layer2_symptom_nlp.py` | Red-flag extraction from the chief complaint, returning the **exact spans** that matched |
 | **3** | `layers/layer3_fusion.py` | Transparent weighted fusion into the Arrival Risk Index, mapped to ESI I–V with a confidence band |
 | **4** | `layers/layer4_deterioration.py` | Re-scores every waiting patient as a time series and escalates on slope |
-| **5** | `layers/layer5_routing.py` | Matches pathway and specialty against live beds and staffing |
+| **5** | `layers/layer5_routing.py` | Suggests a *named* bed and clinician from the live `ward.py` roster, not just a pathway and a count |
 
 ### Three decisions worth defending
 
@@ -157,12 +161,12 @@ pipeline · the scheduler loop · SQLite persistence with append-only scores · 
 trail · the override flow · shadow-mode agreement tracking · WebSocket push with
 polling fallback.
 
-**Stubbed, deliberately:** bed and staffing data are simulated in-process (a real
-deployment reads these from the hospital's system) · patient arrivals and vitals come
-from `simulation.py` rather than live monitors · the scripted ambulance call's
-Voice Intake does real, live browser speech-to-text.
+**Stubbed, deliberately:** the scripted scenario's patient arrivals and vitals come
+from `simulation.py` rather than live monitors, and the bed/clinician roster (below)
+starts from a fixed initial headcount rather than a hospital's staffing system —
+everything downstream of that roster (occupancy, routing, the Ward Map) is real.
 
-**Red-flag extraction (Layers 0 and 2) is a genuine three-tier failover**, in
+**Red-flag extraction (Layer 2) is a genuine three-tier failover**, in
 `layers/nlp_core.py`: Gemini (`layers/nlp_llm.py`), grounded on
 `data/clinical_lexicon.json`'s closed vocabulary, is tried first; if it's
 unconfigured or fails, Groq — a second vendor, so one provider's outage doesn't
@@ -186,21 +190,54 @@ decision gate as everyone else. It needs the LLM tier — there's no lexicon fal
 for translation — and says so plainly if it isn't configured, rather than silently
 extracting nothing useful from non-English text.
 
+**The Ward Map turns capacity from a count into a roster.** `backend/ward.py`
+generates individually-identified beds (`RC-1`, `AM-2`, ...) and clinicians, each
+with its own status — `available` / `occupied` / `cleaning` / `unavailable` for a
+bed, `available` / `busy` / `off_shift` for a clinician. Layer 5 no longer just
+counts free beds in a pathway; it names the specific bed and clinician it would
+assign (`suggested_bed`, `suggested_clinician`), and the nurse's own console shows
+that same name on the decision gate. Accepting or overriding a recommendation is the
+one place `assigned_esi` is written *and* the one place a bed goes from available to
+occupied — the acuity decision and the resource commitment happen in the same click,
+not as two things that can drift apart. If a patient already admitted deteriorates
+further, Layer 4's re-triage now fires for in-treatment patients too (previously
+waiting-room only): accepting that escalation releases their current bed (to
+`cleaning`, not straight back to `available` — that's what actually happens to a bed
+someone is moved out of) and assigns the new one. The Ward Map page
+(`frontend/app/ward`) is the live, colour-coded view of all of it, and the only page
+where staff can directly mark a bed clean or a clinician back on shift — never
+"occupied" or "busy" by hand, since those only mean anything tied to an actual
+patient.
+
+**Patient Intake creates a live patient, not a preview.** `POST /api/intake` used to
+return an ARI number and nothing else. It now runs the exact same path Voice Intake
+does — `Engine.create_intake_patient` — so submitting the reviewed form (personal
+details, dictated complaint, manually entered vitals, PDF-extracted lab results)
+puts a real, queued patient on the Triage Dashboard, scored before the response even
+returns. A lab PDF's extracted test panel is also scanned for vital-sign-shaped
+entries (`backend/lab/pipeline.py:infer_vitals`) — pulse, blood pressure, SpO₂,
+temperature, respiratory rate — and used to pre-fill the vitals fields, so a report
+that happens to carry a physical-exam block doesn't need those numbers retyped by
+hand.
+
 ---
 
 ## API
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /api/board` | Full board state |
+| `GET /api/board` | Full board state — patients, ward roster, capacity, audit feed |
 | `WS /ws` | Live push, ~1s cadence |
-| `POST /api/decide/{id}/accept` | Nurse accepts the recommendation |
-| `POST /api/decide/{id}/override?esi=III` | Nurse overrides — logged |
+| `POST /api/decide/{id}/accept` | Nurse accepts the recommendation — commits the suggested bed & clinician |
+| `POST /api/decide/{id}/override?esi=III` | Nurse overrides — recomputes routing for the overridden ESI, logged |
 | `POST /api/admit/{id}` | Move patient to their bed |
 | `POST /api/voice-intake` | Voice Intake — `{transcript, lang}` in, a new patient scored and queued out. Requires the LLM tier |
-| `POST /api/extract-lab` | PDF lab report upload — returns structured demographics and `test_results`; requires Docling and Ollama |
-| `POST /api/ari` | Calculates an ARI preview from the reviewed intake payload |
-| `POST /api/control/pause` · `/reset` | Clock control |
+| `POST /api/intake` | Structured intake form — creates a live, queued patient from reviewed details/vitals/labs |
+| `POST /api/extract-lab` | PDF lab report upload — structured demographics, `test_results`, and inferred `vitals`; requires Docling and Ollama |
+| `POST /api/ari` | Stateless ARI preview from an unreviewed snapshot — no patient created |
+| `POST /api/ward/beds/{id}/status` | Staff sets a bed to available / cleaning / unavailable |
+| `POST /api/ward/clinicians/{id}/status` | Staff sets a clinician to available / off_shift |
+| `POST /api/control/reset` | Reset the simulation |
 | `GET /api/audit` | Decision log and agreement rate |
 | `GET /api/model` | Layer 1 metrics |
 
@@ -213,15 +250,19 @@ backend/
   main.py            FastAPI app, scheduler loop, WebSocket
   db.py              SQLite — append-only scores, audit trail
   simulation.py      Simulated department and patient physiology
-  layers/            The six layers, one file each
+  ward.py            Bed/clinician roster — the one source of truth Layer 5
+                      routes against and the Ward Map renders
+  layers/            The five layers, one file each
+  lab/               PDF lab report extraction — Docling + local Ollama
   ml/train.py        Model training
 frontend/            Next.js + TypeScript nurse console
-  app/               App Router entry point and global styles
-  components/        Navigation, dashboard, board, intake and drawer components
+  app/               App Router entry point — dashboard, intake, ward routes
+  components/        Navigation, dashboard, board, intake, ward map, drawer
   lib/               Typed API client and shared domain models
 data/
-  clinical_lexicon.json   Red-flag rubric shared by Layers 0 and 2
+  clinical_lexicon.json   Red-flag rubric for Layer 2
 docs/ARCHITECTURE.md
 ```
 
-No build step, no bundler, no cloud dependency. It runs offline.
+Backend runs fully offline by default (the LLM tier is opt-in). The frontend is a
+standard Next.js app — it does have a build step now, `npm install && npm run dev`.
