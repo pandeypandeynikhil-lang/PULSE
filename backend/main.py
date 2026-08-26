@@ -466,6 +466,7 @@ async def api_ari(body: ARIIn):
 @app.post("/api/intake")
 async def api_intake(body: IntakeIn):
     """Accept the complete, organised patient intake and calculate its ARI."""
+    print("intake payload:", body)
     complaint = " ".join(filter(None, (
         body.presentation.complaint, body.presentation.nursing_assessment)))
     symptom = layer2_symptom_nlp.score(complaint)
