@@ -39,8 +39,7 @@ export async function calculateARI(patientData: unknown): Promise<{ ari: number;
   return body;
 }
 
-export async function submitIntake(payload: IntakePayload): Promise<{ ari: number; esi: string; confidence: string }> {
-  console.log("Submitting intake payload:", payload);
+export async function submitIntake(payload: IntakePayload) {
   const response = await fetch(`${API_ORIGIN}/api/intake`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -48,5 +47,26 @@ export async function submitIntake(payload: IntakePayload): Promise<{ ari: numbe
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.detail || "Unable to submit the patient intake.");
-  return body;
+  // Submitting now creates a live, queued patient (see backend/main.py
+  // Engine.create_intake_patient) — `ok`/`error` come back the same way
+  // every other patient-creating endpoint reports failure, rather than a
+  // bare HTTP error being the only signal something went wrong.
+  return body as { ok: boolean; error?: string; id?: string; display_id?: string;
+    ari?: number; esi?: string; confidence?: string };
+}
+
+export async function setBedStatus(bedId: string, status: string) {
+  const response = await fetch(`${API_ORIGIN}/api/ward/beds/${bedId}/status`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+  });
+  return response.json() as Promise<{ ok: boolean }>;
+}
+
+export async function setClinicianStatus(clinicianId: string, status: string) {
+  const response = await fetch(`${API_ORIGIN}/api/ward/clinicians/${clinicianId}/status`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+  });
+  return response.json() as Promise<{ ok: boolean }>;
 }

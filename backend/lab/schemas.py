@@ -29,3 +29,9 @@ class LabReport(BaseModel):
         default=None, description="Single report or sample date in DD/MM/YYYY format"
     )
     test_results: list[TestResult] = Field(default_factory=list)
+    # Populated by `pipeline.py` post-extraction, not by the LLM itself — see
+    # `infer_vitals()`. A lab report is a panel of tests, not a vitals chart,
+    # but ED intake sheets often carry a physical-exam block (pulse, BP,
+    # SpO2, temp) alongside the panel, and Layer 1 needs those as numbers in
+    # its own vocabulary, not as one more row in `test_results`.
+    vitals: dict[str, float] = Field(default_factory=dict)

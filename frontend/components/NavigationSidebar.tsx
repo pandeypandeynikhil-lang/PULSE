@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 const links = [
   { href: "/intake", label: "Patient Intake", icon: "+" },
   { href: "/dashboard", label: "Triage Dashboard", icon: "~" },
+  { href: "/ward", label: "Ward Map", icon: "#" },
 ];
 
 export default function NavigationSidebar() {

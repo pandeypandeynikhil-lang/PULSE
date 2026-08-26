@@ -4,10 +4,24 @@ Scores the patient against the department as it actually is right now, not
 against an idealised one. A greedy assignment is the right call here: it is
 explainable in one sentence, it runs in microseconds, and nobody in an
 emergency department is going to trust a route they cannot follow.
+
+As of the ward roster (`backend/ward.py`), "capacity-aware" means something
+more specific than a bed count: this layer names the exact bed and the exact
+clinician it would assign, so the nurse console's accept/override gate has
+something concrete to act on — and so accepting a recommendation can mark
+that one bed occupied, not just decrement a total.
 """
 from __future__ import annotations
 
 from typing import Any
+
+try:
+    from .. import ward
+except ImportError:
+    # Supports `uvicorn main:app` from inside backend/, where `layers` is
+    # imported as a top-level package with no parent for `..` to climb to —
+    # same fallback main.py already uses for db/simulation/ward itself.
+    import ward  # type: ignore[no-redef]
 
 # system -> (pathway, specialty)
 PATHWAYS = {
@@ -24,7 +38,8 @@ DEFAULT = ("Acute majors", "Emergency medicine")
 FAST_TRACK = ("Fast track", "Emergency nurse practitioner")
 
 
-def route(esi: str, systems: list[str], capacity: dict[str, Any]) -> dict[str, Any]:
+def route(esi: str, systems: list[str],
+          beds: list[ward.Bed], clinicians: list[ward.Clinician]) -> dict[str, Any]:
     if esi in ("IV", "V"):
         pathway, specialty = FAST_TRACK
     else:
@@ -34,26 +49,32 @@ def route(esi: str, systems: list[str], capacity: dict[str, Any]) -> dict[str, A
                 pathway, specialty = PATHWAYS[s]
                 break
 
-    beds = capacity.get("beds", {})
-    free = beds.get(pathway, 0)
-    specialists = capacity.get("specialists", {})
-    spec_free = specialists.get(specialty, 0)
+    free_beds = ward.free_beds(beds, pathway)
+    free_clinicians = ward.free_clinicians(clinicians, specialty)
+    bed = free_beds[0] if free_beds else None
+    clinician = free_clinicians[0] if free_clinicians else None
 
     notes, blocked = [], False
-    if free <= 0:
+    if bed is None:
         blocked = True
         notes.append(f"No {pathway.lower()} bed free")
-        alt = next((p for p, n in beds.items() if n > 0 and p != pathway), None)
+        alt = next((b for b in beds if b.status == "available" and b.ward != pathway), None)
         if alt:
-            notes.append(f"{alt} available as holding")
-    if spec_free <= 0:
+            notes.append(f"{alt.ward} available as holding")
+    if clinician is None:
         notes.append(f"{specialty} not currently free — page required")
 
     return {
         "pathway": pathway,
         "specialty": specialty,
-        "beds_free": free,
-        "specialist_available": spec_free > 0,
+        "beds_free": len(free_beds),
+        "specialist_available": clinician is not None,
         "blocked": blocked,
         "notes": notes,
+        # The concrete assignment a nurse's ACCEPT actually commits to —
+        # None when nothing is free, which the console renders as "page
+        # required" / "holding" rather than silently assigning nothing.
+        "suggested_bed": bed.id if bed else None,
+        "suggested_clinician": clinician.id if clinician else None,
+        "suggested_clinician_name": clinician.name if clinician else None,
     }
