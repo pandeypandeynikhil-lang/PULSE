@@ -213,3 +213,11 @@ button.mic:disabled{opacity:.4;cursor:not-allowed}
 ::-webkit-scrollbar-thumb{background:#D6C4EC;border-radius:5px}
 ::-webkit-scrollbar-track{background:transparent}
 @media(max-width:1180px){.grid{grid-template-columns:1fr}}
+
+.editable-result{grid-template-columns:1.35fr 1fr .65fr 1.1fr .8fr auto}
+.editable-header{padding:7px 9px;color:var(--dim);font-size:10px;font-weight:600}
+.editable-header span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:900px){
+  .editable-result{grid-template-columns:1fr 1fr}
+  .editable-header{display:none}
+}

@@ -40,6 +40,7 @@ export async function calculateARI(patientData: unknown): Promise<{ ari: number;
 }
 
 export async function submitIntake(payload: IntakePayload): Promise<{ ari: number; esi: string; confidence: string }> {
+  console.log("Submitting intake payload:", payload);
   const response = await fetch(`${API_ORIGIN}/api/intake`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
