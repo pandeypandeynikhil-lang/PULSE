@@ -29,7 +29,7 @@ export async function extractLab(file: File): Promise<LabReport> {
   return body as LabReport;
 }
 
-export async function calculateARI(patientData: unknown): Promise<{ ari: number; esi: string; confidence: string }> {
+export async function calculateARI(patientData: unknown): Promise<{ ari: number; esi: string; confidence: string; lab_evaluation?: { multiplier: number; reason: string | null } }> {
   const response = await fetch(`${API_ORIGIN}/api/ari`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patientData),
@@ -52,7 +52,8 @@ export async function submitIntake(payload: IntakePayload) {
   // every other patient-creating endpoint reports failure, rather than a
   // bare HTTP error being the only signal something went wrong.
   return body as { ok: boolean; error?: string; id?: string; display_id?: string;
-    ari?: number; esi?: string; confidence?: string };
+    ari?: number; esi?: string; confidence?: string;
+    lab_evaluation?: { multiplier: number; reason: string | null } };
 }
 
 export async function setBedStatus(bedId: string, status: string) {

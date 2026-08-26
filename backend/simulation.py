@@ -30,6 +30,7 @@ class SimPatient:
     complaint: str
     arrive_min: float
     timeline: list[VitalsPoint]
+    nursing_assessment: str | None = ""
     transcript: str | None = None
     status: str = "inbound"
     assigned_esi: str | None = None
@@ -40,6 +41,9 @@ class SimPatient:
     escalated: bool = False
     seen_at_min: float | None = None
     seed_esi: str | None = None   # acuity already assigned before the shift
+    lab_out: dict[str, Any] | None = None
+    lab_results: list[dict[str, Any]] | None = None
+    sirs_data: dict[str, Any] | None = None
 
     def vitals_at(self, t: float) -> dict[str, Any] | None:
         if self.arrived_at_min is None:

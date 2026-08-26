@@ -29,14 +29,14 @@ from pydantic import BaseModel, Field
 
 try:
     from . import db, simulation, ward
-    from .layers import (layer1_vitals, layer2_symptom_nlp,
+    from .layers import (layer1_vitals, layer1b_heuristics, layer2_symptom_nlp, layer2b_labs,
                          layer3_fusion, layer4_deterioration, layer5_routing)
 except ImportError:
     # Supports `uvicorn main:app` when the working directory is backend/.
     import db  # type: ignore[no-redef]
     import simulation  # type: ignore[no-redef]
     import ward  # type: ignore[no-redef]
-    from layers import (layer1_vitals, layer2_symptom_nlp,
+    from layers import (layer1_vitals, layer1b_heuristics, layer2_symptom_nlp, layer2b_labs,
                         layer3_fusion, layer4_deterioration, layer5_routing)
 
 TICK_SECONDS = 1.0          # wall-clock cadence of the scheduler
@@ -91,10 +91,12 @@ class Engine:
 
     # ------------------------------------------------------------- pipeline
     def score_patient(self, p: simulation.SimPatient) -> dict[str, Any] | None:
-        symptom = layer2_symptom_nlp.score(p.complaint or "")
+        symptom = layer2_symptom_nlp.score(
+            p.complaint or "", p.nursing_assessment or "")
         vitals_raw = p.vitals_at(self.sim_minutes)
+        sirs_data = layer1b_heuristics.evaluate_sirs(vitals_raw or {}, p.lab_results)
         vitals_out = layer1_vitals.score(vitals_raw) if vitals_raw else None
-        fused = layer3_fusion.fuse(vitals_out, symptom, p.age)
+        fused = layer3_fusion.fuse(vitals_out, symptom, p.age, p.lab_out, sirs_data)
 
         # Persist a score when it actually says something new, or every few
         # simulated minutes. Writing one row per tick would bury the trajectory
@@ -104,7 +106,8 @@ class Engine:
                 or self.sim_minutes - prev["at"] >= 4.0):
             db.append_score(self.conn, p.id, self.sim_minutes, fused,
                             {"vitals": vitals_raw, "vitals_out": vitals_out,
-                             "symptom": symptom})
+                             "symptom": symptom, "labs": p.lab_out,
+                             "sirs": sirs_data})
 
         history = db.score_history(self.conn, p.id)
         waited = (self.sim_minutes - (p.arrived_at_min or 0))
@@ -113,7 +116,7 @@ class Engine:
         routing = layer5_routing.route(fused["esi"], systems, self.beds, self.clinicians)
 
         return {"fused": fused, "vitals": vitals_raw, "vitals_out": vitals_out,
-                "symptom": symptom, "trend": trend, "routing": routing,
+                "symptom": symptom, "sirs": sirs_data, "trend": trend, "routing": routing,
                 "history": history, "waited": waited}
 
     # ----------------------------------------------------------------- tick
@@ -306,7 +309,8 @@ class Engine:
                 "provider": provider}
 
     # ------------------------------------------------------------ intake form
-    def create_intake_patient(self, body: "IntakeIn") -> dict[str, Any]:
+    def create_intake_patient(self, body: "IntakeIn",
+                              lab_out: dict[str, Any] | None = None) -> dict[str, Any]:
         """The reviewed intake form — personal details, dictated complaint,
         manually entered vitals, and any lab results pulled from a PDF —
         becomes a live, queued patient the instant a nurse submits it, not a
@@ -315,10 +319,11 @@ class Engine:
         decided simultaneously, ARI calculated, queue precedence decided"
         means in code, not just in the sentence describing the feature.
         """
-        complaint = " ".join(filter(None, (
-            body.presentation.complaint, body.presentation.nursing_assessment))).strip()
+        complaint = body.presentation.complaint.strip()
+        nursing_assessment = body.presentation.nursing_assessment.strip()
         vitals = {k: v for k, v in body.vitals.items() if isinstance(v, (int, float))}
-        if not complaint and not vitals:
+        labs = body.laboratory.test_results if body.laboratory else []
+        if not complaint and not nursing_assessment and not vitals and not labs:
             return {"ok": False, "error": ("Nothing to submit — enter a complaint, "
                     "vitals, or lab results first.")}
 
@@ -328,9 +333,11 @@ class Engine:
 
         p = simulation.SimPatient(
             id=pid, display_id=display_id, age=age, arrival_mode="walk-in",
-            complaint=complaint or "structured intake — see recorded vitals",
+            complaint=complaint,
+            nursing_assessment=nursing_assessment,
             arrive_min=self.sim_minutes,
-            timeline=[simulation.VitalsPoint(0.0, vitals)])
+            timeline=[simulation.VitalsPoint(0.0, vitals)], lab_out=lab_out,
+            lab_results=labs)
         p.status = "waiting"
         p.arrived_at_min = self.sim_minutes
         self.patients.append(p)
@@ -352,7 +359,8 @@ class Engine:
         return {"ok": True, "id": pid, "display_id": display_id,
                 "ari": res["fused"]["ari"] if res else None,
                 "esi": res["fused"]["esi"] if res else None,
-                "confidence": res["fused"]["confidence"] if res else None}
+                "confidence": res["fused"]["confidence"] if res else None,
+                "lab_evaluation": lab_out}
 
     # --------------------------------------------------------------- output
     def board(self) -> dict[str, Any]:
@@ -369,6 +377,9 @@ class Engine:
                 "arrival_mode": p.arrival_mode,
                 "status": p.status, "assigned_esi": p.assigned_esi,
                 "ari": res["fused"]["ari"], "esi": res["fused"]["esi"],
+                "lab_evaluation": res["fused"]["components"].get("labs"),
+                "sirs": res["fused"]["components"].get("sirs"),
+                "synergy_matched": res["fused"]["components"].get("synergy_matched"),
                 "confidence": res["fused"]["confidence"],
                 "waited": round(res["waited"], 1),
                 "trace": [h["ari"] for h in res["history"]][-10:],
@@ -549,14 +560,18 @@ async def api_voice_intake(body: VoiceIntakeIn):
 @app.post("/api/ari")
 async def api_ari(body: ARIIn):
     """Calculate an ARI preview for a reviewed intake payload."""
-    complaint = " ".join(filter(None, (body.complaint, body.nursing_assessment)))
-    symptom = layer2_symptom_nlp.score(complaint)
+    symptom = layer2_symptom_nlp.score(body.complaint, body.nursing_assessment)
     vitals = dict(body.vitals)
     vitals["age"] = body.age_years
     vitals["arrival_mode"] = "walk-in"
     vitals_out = layer1_vitals.score(vitals)
-    fused = layer3_fusion.fuse(vitals_out, symptom, body.age_years)
-    return JSONResponse({"ari": fused["ari"], "esi": fused["esi"], "confidence": fused["confidence"]})
+    lab_out = await asyncio.to_thread(layer2b_labs.evaluate_labs, body.test_results)
+    sirs_data = layer1b_heuristics.evaluate_sirs(vitals, body.test_results)
+    fused = layer3_fusion.fuse(vitals_out, symptom, body.age_years, lab_out, sirs_data)
+    return JSONResponse({"ari": fused["ari"], "esi": fused["esi"],
+                         "confidence": fused["confidence"],
+                         "lab_evaluation": lab_out,
+                         "sirs": fused["components"].get("sirs")})
 
 
 @app.post("/api/intake")
@@ -564,7 +579,9 @@ async def api_intake(body: IntakeIn):
     """Submit the complete, reviewed patient intake — creates a live,
     queued patient on the board (see Engine.create_intake_patient) rather
     than only returning a preview number."""
-    out = engine.create_intake_patient(body)
+    labs = body.laboratory.test_results if body.laboratory else []
+    lab_out = await asyncio.to_thread(layer2b_labs.evaluate_labs, labs)
+    out = engine.create_intake_patient(body, lab_out)
     if out.get("ok"):
         await engine.broadcast()
     return JSONResponse(out)

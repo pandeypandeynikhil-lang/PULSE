@@ -22,6 +22,9 @@ export interface Patient {
   arrival_mode: string; status: string; assigned_esi?: string | null; esi: string;
   ari: number; waited: number; trace: number[]; trend: Trend; pending: boolean;
   confidence: string; pathway: string; routing: Routing;
+  lab_evaluation?: { multiplier: number; reason: string | null } | null;
+  sirs?: string[] | null;
+  synergy_matched?: string[] | null;
   vitals: Vital; vitals_present: number; drivers: Driver[]; spans: Span[]; nlp_source?: string;
 }
 
