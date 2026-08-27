@@ -85,26 +85,117 @@ export default function IntakePage() {
   const update = <K extends keyof PatientData>(key: K, value: PatientData[K]) =>
     setPatientData((current) => ({ ...current, [key]: value }));
 
-  function applyReport(report: LabReport) { setPatientData(current => ({ ...current, name: report.name || current.name, age_years: report.age_years == null ? current.age_years : String(report.age_years), sex: report.sex || current.sex, referred_by: report.referred_by || current.referred_by, registration_no: report.registration_no || current.registration_no, report_date: report.report_date || current.report_date, test_results: [...current.test_results, ...report.test_results], vitals: { ...current.vitals, ...Object.fromEntries(Object.entries(report.vitals || {}).filter(([key, value]) => value != null && !current.vitals[key as keyof typeof current.vitals]).map(([key, value]) => [key, String(value)])) } })); }
-  async function handleFile(file?: File) { if (!file) return; if (file.type !== "application/pdf") { setMessage("Please select a PDF lab report."); return; } setParsing(true); setMessage("Extracting report with Docling and Ollama..."); try { const report = await extractLab(file); applyReport(report); setMessage(`${report.test_results.length} result${report.test_results.length === 1 ? "" : "s"} added from ${file.name}.`); } catch (error) { setMessage(error instanceof Error ? error.message : "Lab extraction failed."); } finally { setParsing(false); } }
-  function updateResult(index: number, key: keyof TestResult, value: string) { setPatientData(current => ({ ...current, test_results: current.test_results.map((result, resultIndex) => resultIndex === index ? { ...result, [key]: value } : result) })); }
+  function applyReport(report: LabReport) {
+    setPatientData((current) => ({
+      ...current,
+      name: report.name || current.name,
+      age_years:
+        report.age_years == null ? current.age_years : String(report.age_years),
+      sex: report.sex || current.sex,
+      referred_by: report.referred_by || current.referred_by,
+      registration_no: report.registration_no || current.registration_no,
+      report_date: report.report_date || current.report_date,
+      test_results: [...current.test_results, ...report.test_results],
+      vitals: {
+        ...current.vitals,
+        ...Object.fromEntries(
+          Object.entries(report.vitals || {})
+            .filter(
+              ([key, value]) =>
+                value != null &&
+                !current.vitals[key as keyof typeof current.vitals],
+            )
+            .map(([key, value]) => [key, String(value)]),
+        ),
+      },
+    }));
+  }
+  async function handleFile(file?: File) {
+    if (!file) return;
+    if (file.type !== "application/pdf") {
+      setMessage("Please select a PDF lab report.");
+      return;
+    }
+    setParsing(true);
+    setMessage("Extracting report with Docling and Ollama...");
+    try {
+      const report = await extractLab(file);
+      applyReport(report);
+      setMessage(
+        `${report.test_results.length} result${report.test_results.length === 1 ? "" : "s"} added from ${file.name}.`,
+      );
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "Lab extraction failed.",
+      );
+    } finally {
+      setParsing(false);
+    }
+  }
+  function updateResult(index: number, key: keyof TestResult, value: string) {
+    setPatientData((current) => ({
+      ...current,
+      test_results: current.test_results.map((result, resultIndex) =>
+        resultIndex === index ? { ...result, [key]: value } : result,
+      ),
+    }));
+  }
   async function submit() {
     setMessage("Submitting patient intake...");
     try {
-      const payload: IntakePayload = { personal_details: { name: patientData.name.trim(), age_years: patientData.age_years ? Number(patientData.age_years) : null, sex: patientData.sex.trim(), referred_by: patientData.referred_by.trim(), registration_no: patientData.registration_no.trim(), report_date: patientData.report_date.trim() }, presentation: { complaint: patientData.complaint.trim(), nursing_assessment: patientData.nursing_assessment.trim() }, vitals: Object.fromEntries(Object.entries(patientData.vitals).map(([key, value]) => [key, value === "" ? null : Number(value)])), laboratory: { test_results: patientData.test_results } };
+      const payload: IntakePayload = {
+        personal_details: {
+          name: patientData.name.trim(),
+          age_years: patientData.age_years
+            ? Number(patientData.age_years)
+            : null,
+          sex: patientData.sex.trim(),
+          referred_by: patientData.referred_by.trim(),
+          registration_no: patientData.registration_no.trim(),
+          report_date: patientData.report_date.trim(),
+        },
+        presentation: {
+          complaint: patientData.complaint.trim(),
+          nursing_assessment: patientData.nursing_assessment.trim(),
+        },
+        vitals: Object.fromEntries(
+          Object.entries(patientData.vitals).map(([key, value]) => [
+            key,
+            value === "" ? null : Number(value),
+          ]),
+        ),
+        laboratory: { test_results: patientData.test_results },
+      };
       // Submitting doesn't just calculate a number any more — it creates a
       // live, queued patient on the same board Voice Intake and the
       // scripted scenario feed. `ok: false` (e.g. an empty form) is a real
       // outcome to show, not just an HTTP failure.
       const result = await submitIntake(payload);
-      if (!result.ok) { setMessage(result.error || "Patient intake submission failed."); return; }
-      setRisk({ ari: result.ari!, esi: result.esi!, confidence: result.confidence! });
-      setMessage(`${result.display_id} added to the live board — ARI ${result.ari}, ESI ${result.esi}. Review it on the Triage Dashboard.`);
+      if (!result.ok) {
+        setMessage(result.error || "Patient intake submission failed.");
+        return;
+      }
+      setRisk({
+        ari: result.ari!,
+        esi: result.esi!,
+        confidence: result.confidence!,
+      });
+      setMessage(
+        `${result.display_id} added to the live board — ARI ${result.ari}, ESI ${result.esi}. Review it on the Triage Dashboard.`,
+      );
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Patient intake submission failed.");
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Patient intake submission failed.",
+      );
     }
   }
-  const setVital = (key: keyof PatientData["vitals"], value: string) => setPatientData(current => ({ ...current, vitals: { ...current.vitals, [key]: value } }));
+  const setVital = (key: keyof PatientData["vitals"], value: string) =>
+    setPatientData((current) => ({
+      ...current,
+      vitals: { ...current.vitals, [key]: value },
+    }));
 
   return (
     <main className="page-wrap intake-page">
@@ -301,10 +392,7 @@ export default function IntakePage() {
               <span />
             </div>
             {patientData.test_results.map((result, index) => (
-              <div
-                className="editable-result"
-                key={index}
-              >
+              <div className="editable-result" key={index}>
                 <input
                   aria-label="Test name"
                   value={result.test_name}
