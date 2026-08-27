@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { sendVoice } from "@/lib/api";
+import { IconMic } from "./Icons";
 
 const languages = [
   ["en-US", "English"],
@@ -103,7 +104,7 @@ export default function VoiceIntake({ onSent, onTranscript, submitToBackend = tr
     } else setStatus(result.error || "Voice intake failed.");
   }
 
-  if (!submitToBackend) return <div className="inline-voice"><button className={`mic ${recording ? "on" : ""}`} onClick={() => recording ? recognition.current?.stop() : startListening()}>{recording ? "Stop dictation" : "Start dictation"}</button><button className="mini ok" onClick={submit}>Append dictation</button><span className="voice-status">{status}</span></div>;
+  if (!submitToBackend) return <div className="inline-voice"><button className={`mic ${recording ? "on" : ""}`} onClick={() => recording ? recognition.current?.stop() : startListening()}><IconMic width={15} height={15} />{recording ? "Stop dictation" : "Start dictation"}</button><button className="mini ok" onClick={submit}>Append dictation</button><span className="voice-status">{status}</span></div>;
 
   return (
     <section className="voice">
@@ -130,6 +131,7 @@ export default function VoiceIntake({ onSent, onTranscript, submitToBackend = tr
               recording ? recognition.current?.stop() : startListening()
             }
           >
+            <IconMic width={15} height={15} />
             {recording ? "Stop" : "Start"}
           </button>
           <button className="mini ok" onClick={submit}>

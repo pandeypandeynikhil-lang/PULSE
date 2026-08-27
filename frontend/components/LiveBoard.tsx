@@ -1,6 +1,6 @@
 import type { Patient } from "@/lib/types";
 
-function Sparkline({ values, alert }: { values: number[]; alert: boolean }) { if (values.length < 2) return <span className="pill">-</span>; const points = values.map((value, index) => `${(index / (values.length - 1)) * 86},${24 - (value / 100) * 24}`).join(" "); return <svg className="spark" viewBox="0 0 86 24"><polyline points={points} fill="none" stroke={alert ? "#B23B54" : "#7A45CE"} strokeWidth="1.8" /></svg>; }
+function Sparkline({ values, alert }: { values: number[]; alert: boolean }) { if (values.length < 2) return <span className="pill">-</span>; const points = values.map((value, index) => `${(index / (values.length - 1)) * 86},${24 - (value / 100) * 24}`).join(" "); return <svg className="spark" viewBox="0 0 86 24"><polyline points={points} fill="none" stroke={alert ? "#FF93A6" : "#B9A6FF"} strokeWidth="1.8" /></svg>; }
 
 // A pending recommendation always wins the action slot, even for an
 // already-admitted patient — Layer 4 re-scores in-treatment patients too

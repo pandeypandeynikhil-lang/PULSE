@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { API_ORIGIN, getBoard, setBedStatus, setClinicianStatus } from "@/lib/api";
 import type { Bed, BedStatus, BoardState, Clinician, ClinicianStatus } from "@/lib/types";
+import { IconBed, IconClinician } from "./Icons";
 
 // Only these transitions are a staff member's to make by clicking a box.
 // "occupied" / "busy" are never in this cycle — they only ever happen
@@ -45,7 +46,7 @@ function BedBox({ bed, patientLabel, onCycle }: { bed: Bed; patientLabel?: strin
       disabled={!clickable}
       title={clickable ? `Click to mark ${BED_LABEL[BED_CYCLE[bed.status]].toLowerCase()}` : `Occupied by ${patientLabel ?? bed.patient_id}`}
     >
-      <span className="ward-box-icon" aria-hidden>🛏</span>
+      <span className="ward-box-icon"><IconBed width={15} height={15} /></span>
       <span className="ward-box-body">
         <span className="ward-box-id">{bed.id}</span>
         <span className="ward-box-status">{bed.status === "occupied" ? (patientLabel ?? bed.patient_id) : BED_LABEL[bed.status]}</span>
@@ -63,7 +64,7 @@ function ClinicianBox({ clinician, patientLabel, onCycle }: { clinician: Clinici
       disabled={!clickable}
       title={clickable ? `Click to mark ${CLINICIAN_LABEL[CLINICIAN_CYCLE[clinician.status]].toLowerCase()}` : `With ${patientLabel ?? clinician.patient_id}`}
     >
-      <span className="ward-box-icon" aria-hidden>⚕</span>
+      <span className="ward-box-icon"><IconClinician width={15} height={15} /></span>
       <span className="ward-box-body">
         <span className="ward-box-id">{clinician.name}</span>
         <span className="ward-box-status">{clinician.status === "busy" ? (patientLabel ?? clinician.patient_id) : CLINICIAN_LABEL[clinician.status]}</span>

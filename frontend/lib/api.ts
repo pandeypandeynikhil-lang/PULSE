@@ -12,6 +12,14 @@ export async function post(path: string): Promise<void> {
   await fetch(`${API_ORIGIN}${path}`, { method: "POST" });
 }
 
+export async function getModel() {
+  const response = await fetch(`${API_ORIGIN}/api/model`, { cache: "no-store" });
+  if (!response.ok) throw new Error("Unable to load model metrics");
+  return response.json() as Promise<{
+    roc_auc: number; sensitivity: number; undertriage_rate: number; n_test: number;
+  }>;
+}
+
 export async function sendVoice(transcript: string, lang: string) {
   const response = await fetch(`${API_ORIGIN}/api/voice-intake`, {
     method: "POST", headers: { "Content-Type": "application/json" },
