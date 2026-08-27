@@ -2,19 +2,29 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { IconDashboard, IconIntake, IconWard, PulseMark } from "./Icons";
 
 const links = [
-  { href: "/intake", label: "Patient Intake", icon: "+" },
-  { href: "/dashboard", label: "Triage Dashboard", icon: "~" },
-  { href: "/ward", label: "Ward Map", icon: "#" },
+  { href: "/intake", label: "Patient Intake", Icon: IconIntake },
+  { href: "/dashboard", label: "Triage Dashboard", Icon: IconDashboard },
+  { href: "/ward", label: "Ward Map", Icon: IconWard },
 ];
 
 export default function NavigationSidebar() {
   const pathname = usePathname();
   return <aside className="navigation-sidebar">
-    <div className="nav-brand"><span className="nav-mark">P</span><div><strong>PULSE</strong><small>Clinical workspace</small></div></div>
+    <Link href="/" className="nav-brand">
+      <span className="nav-mark"><PulseMark width={18} height={18} /></span>
+      <div><strong>PULSE</strong><small>Clinical workspace</small></div>
+    </Link>
     <div className="nav-section-label">Workspace</div>
-    <nav aria-label="Primary navigation">{links.map(link => <Link key={link.href} href={link.href} className={`nav-link ${pathname === link.href ? "active" : ""}`}><span className="nav-icon">{link.icon}</span>{link.label}</Link>)}</nav>
+    <nav aria-label="Primary navigation">
+      {links.map(({ href, label, Icon }) => (
+        <Link key={href} href={href} className={`nav-link ${pathname === href ? "active" : ""}`}>
+          <span className="nav-icon"><Icon width={17} height={17} /></span>{label}
+        </Link>
+      ))}
+    </nav>
     <div className="nav-footer"><span className="status-dot" />Local services connected</div>
   </aside>;
 }
