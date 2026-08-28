@@ -19,13 +19,33 @@ export interface Routing {
 
 export interface Patient {
   id: string; display_id: string; age: number | null; complaint: string; transcript?: string;
+  name?: string; sex?: string; registration_no?: string; lab_results?: any[];
   arrival_mode: string; status: string; assigned_esi?: string | null; esi: string;
   ari: number; waited: number; trace: number[]; trend: Trend; pending: boolean;
   confidence: string; pathway: string; routing: Routing;
   lab_evaluation?: { multiplier: number; reason: string | null } | null;
+  medications?: Medication[];
+  clinical_notes?: ClinicalNote[];
   sirs?: string[] | null;
   synergy_matched?: string[] | null;
   vitals: Vital; vitals_present: number; drivers: Driver[]; spans: Span[]; nlp_source?: string;
+}
+
+export interface Medication {
+  id: number;
+  medication_name: string;
+  dosage: string;
+  scheduled_time: string;
+  status: "scheduled" | "given" | "held" | "cancelled";
+  given_at?: string | null;
+  notes?: string | null;
+}
+
+export interface ClinicalNote {
+  id: number;
+  note_type: "surgical" | "discharge_summary" | "follow_up";
+  content: string;
+  created_at: string;
 }
 
 // Bed/clinician status vocabulary — kept as string unions rather than a

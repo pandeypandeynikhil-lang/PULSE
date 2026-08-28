@@ -1,34 +1,25 @@
 import type { BoardState } from "@/lib/types";
 
 export default function Sidebar({ state }: { state: BoardState }) {
-  const base: Record<string, number> = { "Acute majors": 3, "Fast track": 4 };
+  const medications = state.rows.flatMap((patient) =>
+    (patient.medications || [])
+      .filter((med) => med.status === "scheduled")
+      .map((med) => ({ patient, med })),
+  );
   return (
     <aside className="col">
       <section className="panel">
         <div className="ph">
-          <b>Department state</b>
-          <span className="sub">Layer 5 routes against this</span>
+          <b>Medication schedule</b>
+          <span className="sub">scheduled for this shift</span>
         </div>
-        <div className="cap">
-          {Object.entries(state.capacity.beds).map(([name, count]) => (
-            <div className="cline" key={name}>
-              <span className="nm">{name}</span>
-              <span className="bar">
-                <i
-                  style={{
-                    width: `${Math.min(100, (count / (base[name] || 1)) * 100)}%`,
-                  }}
-                />
-              </span>
-              <span className="n">
-                {count}/{base[name] || 1}
-              </span>
+        <div className="medication-sidebar-list">
+          {medications.length === 0 ? <p className="sidebar-empty">No scheduled medications.</p> : medications.map(({ patient, med }) => (
+            <div className="sidebar-medication" key={`${patient.id}-${med.id}`}>
+              <div><b>{med.medication_name}</b><span>{patient.name || patient.display_id}</span></div>
+              <strong>{med.scheduled_time || "Time not set"}</strong>
             </div>
           ))}
-          <div className="cline">
-            <span className="nm">Staff on shift</span>
-            <span className="n">{state.capacity.staff_on}</span>
-          </div>
         </div>
       </section>
       <section className="panel">

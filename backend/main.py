@@ -14,7 +14,7 @@ import logging
 import os
 import time
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from dotenv import load_dotenv
 
@@ -82,6 +82,7 @@ class Engine:
                 "id": p.id, "display_id": p.display_id, "age": p.age,
                 "arrival_mode": p.arrival_mode, "complaint": p.complaint,
                 "transcript": p.transcript, "arrived_at": p.arrive_min,
+                "nursing_assessment": p.nursing_assessment,
                 "status": p.status, "assigned_esi": p.assigned_esi})
 
     def log(self, kind: str, text: str, patient: str | None = None) -> None:
@@ -300,6 +301,7 @@ class Engine:
             "id": p.id, "display_id": p.display_id, "age": p.age,
             "arrival_mode": p.arrival_mode, "complaint": p.complaint,
             "transcript": p.transcript, "arrived_at": p.arrived_at_min,
+            "nursing_assessment": p.nursing_assessment,
             "status": p.status, "assigned_esi": p.assigned_esi})
 
         self.log("voice", f"{display_id}: voice intake ({lang} via "
@@ -330,10 +332,17 @@ class Engine:
         self.intake_seq += 1
         pid, display_id = f"intake{self.intake_seq:02d}", f"PT I{self.intake_seq}"
         age = body.personal_details.age_years
+        name = body.personal_details.name if body.personal_details.name else display_id
+        sex = body.personal_details.sex or None
+        reg_no = body.personal_details.registration_no or None
+        ref_by = body.personal_details.referred_by or None
+        rep_date = body.personal_details.report_date or None
+        raw_json = body.model_dump_json() if hasattr(body, "model_dump_json") else None
 
         p = simulation.SimPatient(
             id=pid, display_id=display_id, age=age, arrival_mode="walk-in",
-            complaint=complaint,
+            name=name, sex=sex, registration_no=reg_no, referred_by=ref_by,
+            report_date=rep_date, raw_intake=raw_json, complaint=complaint,
             nursing_assessment=nursing_assessment,
             arrive_min=self.sim_minutes,
             timeline=[simulation.VitalsPoint(0.0, vitals)], lab_out=lab_out,
@@ -346,7 +355,10 @@ class Engine:
             "id": p.id, "display_id": p.display_id, "age": p.age,
             "arrival_mode": p.arrival_mode, "complaint": p.complaint,
             "transcript": p.transcript, "arrived_at": p.arrived_at_min,
-            "status": p.status, "assigned_esi": p.assigned_esi})
+            "status": p.status, "assigned_esi": p.assigned_esi,
+            "name": p.name, "sex": p.sex, "registration_no": p.registration_no,
+            "referred_by": p.referred_by, "report_date": p.report_date,
+            "raw_intake": p.raw_intake, "lab_results": p.lab_results})
 
         # Score immediately rather than waiting for the next tick, so the
         # nurse who just submitted the form sees the real ARI/queue position
@@ -367,13 +379,19 @@ class Engine:
         rows = []
         for p in self.patients:
             res = getattr(p, "_last", None)
-            if p.status == "inbound":
+            if p.status in ("inbound", "discharged"):
                 continue
             if res is None:
                 continue
             rows.append({
                 "id": p.id, "display_id": p.display_id, "age": p.age,
+                "name": getattr(p, "name", None), "sex": getattr(p, "sex", None),
+                "registration_no": getattr(p, "registration_no", None),
+                "lab_results": getattr(p, "lab_results", []),
+                "medications": db.get_medications(self.conn, p.id),
+                "clinical_notes": db.get_clinical_notes(self.conn, p.id),
                 "complaint": p.complaint, "transcript": p.transcript,
+                "nursing_assessment": p.nursing_assessment,
                 "arrival_mode": p.arrival_mode,
                 "status": p.status, "assigned_esi": p.assigned_esi,
                 "ari": res["fused"]["ari"], "esi": res["fused"]["esi"],
@@ -548,6 +566,66 @@ class IntakeIn(BaseModel):
     laboratory: LaboratoryIn = Field(default_factory=LaboratoryIn)
 
 
+class MedicationIn(BaseModel):
+    medication_name: str
+    dosage: str = ""
+    scheduled_time: str = ""
+    notes: str = ""
+
+
+class MedicationUpdateIn(BaseModel):
+    status: Literal["scheduled", "given", "held", "cancelled"]
+    given_at: str | None = None
+
+
+class ClinicalNoteIn(BaseModel):
+    note_type: Literal["surgical", "follow_up"]
+    content: str
+
+
+class DischargeIn(BaseModel):
+    discharge_summary: str
+    follow_up_instructions: str = ""
+    discharge_date_time: str | None = None
+
+
+class ProfileUpdateIn(BaseModel):
+    name: str | None = None
+    age: int | None = None
+    sex: str | None = None
+    registration_no: str | None = None
+    referred_by: str | None = None
+    report_date: str | None = None
+    complaint: str | None = None
+    nursing_assessment: str | None = None
+    raw_intake: str | None = None
+    lab_results: list[dict[str, Any]] | None = None
+    labs: list[dict[str, Any]] | None = None
+    medications: list[dict[str, Any]] | None = None
+    vitals: dict[str, Any] | None = None
+    ari: int | None = Field(default=None, ge=0, le=100)
+    esi: str | None = None
+    pathway: str | None = None
+    bed_id: str | None = None
+    clinician_id: str | None = None
+
+
+class MedicationScheduleIn(BaseModel):
+    patient_id: str
+    name: str
+    schedule_time: str = ""
+    frequency: str = ""
+    instructions: str = ""
+
+
+class EmergencyMedicationIn(BaseModel):
+    patient_id: str
+    name: str
+    given_date: str = ""
+    given_time: str = ""
+    remarks: str = ""
+
+
 @app.post("/api/voice-intake")
 async def api_voice_intake(body: VoiceIntakeIn):
     out = await engine.create_voice_patient(body.transcript, body.lang)
@@ -585,6 +663,180 @@ async def api_intake(body: IntakeIn):
     if out.get("ok"):
         await engine.broadcast()
     return JSONResponse(out)
+
+
+@app.get("/api/patients/search")
+async def api_search_patients(q: str = ""):
+    return JSONResponse(db.search_patients(engine.conn, q.strip()) if q.strip() else [])
+
+
+def _profile_payload(patient_id: str) -> dict[str, Any]:
+    patient = _patient_or_404(patient_id)
+    stored = db.get_patient(engine.conn, patient_id) or {}
+    score = db.latest_score(engine.conn, patient_id) or {}
+    score_payload = score.get("payload") or {}
+    assigned_bed = next((b for b in engine.beds if b.patient_id == patient_id), None)
+    assigned_clinician = next((c for c in engine.clinicians if c.patient_id == patient_id), None)
+    try:
+        stored_labs = json.loads(stored.get("lab_results") or "[]")
+    except (TypeError, json.JSONDecodeError):
+        stored_labs = []
+    return {
+        **stored,
+        "id": patient.id,
+        "display_id": patient.display_id,
+        "age": patient.age,
+        "name": patient.name or stored.get("name") or patient.display_id,
+        "status": patient.status,
+        "nursing_assessment": patient.nursing_assessment or stored.get("nursing_assessment"),
+        "lab_results": patient.lab_results or stored_labs,
+        "vitals": score_payload.get("vitals") or {},
+        "ari": score.get("ari"), "esi": score.get("esi"),
+        "confidence": score.get("confidence"),
+        "ward": {"bed": assigned_bed.id if assigned_bed else None,
+                 "bed_ward": assigned_bed.ward if assigned_bed else None,
+                 "clinician": assigned_clinician.id if assigned_clinician else None,
+                 "clinician_name": assigned_clinician.name if assigned_clinician else None},
+        "medications": db.get_medications(engine.conn, patient_id),
+        "clinical_notes": db.get_clinical_notes(engine.conn, patient_id),
+    }
+
+
+@app.get("/api/patients/{patient_id}/profile")
+async def api_patient_profile(patient_id: str):
+    return JSONResponse(_profile_payload(patient_id))
+
+
+@app.patch("/api/patients/{patient_id}/profile")
+async def api_update_patient_profile(patient_id: str, body: ProfileUpdateIn):
+    patient = _patient_or_404(patient_id)
+    data = body.model_dump(exclude_unset=True)
+    if "labs" in data and "lab_results" not in data:
+        data["lab_results"] = data["labs"]
+    db.update_patient_profile(engine.conn, patient_id, data)
+    if "medications" in data:
+        db.replace_medications(engine.conn, patient_id, data["medications"] or [])
+    for field in ("name", "age", "sex", "registration_no", "referred_by", "report_date",
+                  "complaint", "nursing_assessment", "raw_intake", "lab_results", "pathway"):
+        if field in data:
+            setattr(patient, field if field != "age" else "age", data[field])
+    if "lab_results" in data:
+        patient.lab_results = data["lab_results"] or []
+    if "ari" in data or "esi" in data:
+        current = db.latest_score(engine.conn, patient_id) or {}
+        current_payload = current.get("payload") or {}
+        db.add_score_override(engine.conn, patient_id, data.get("ari", current.get("ari", 0)),
+                      data.get("esi", current.get("esi", "V")),
+                      {"vitals": data.get("vitals", current_payload.get("vitals", {}))})
+    if "bed_id" in data:
+        ward.release_bed_for(engine.beds, patient_id)
+        if data["bed_id"]:
+            ward.assign_bed(engine.beds, data["bed_id"], patient_id)
+    if "clinician_id" in data:
+        ward.release_clinician_for(engine.clinicians, patient_id)
+        if data["clinician_id"]:
+            ward.assign_clinician(engine.clinicians, data["clinician_id"], patient_id)
+    await engine.broadcast()
+    return JSONResponse({"ok": True, "profile": _profile_payload(patient_id)})
+
+
+def _patient_or_404(patient_id: str) -> simulation.SimPatient:
+    patient = next((item for item in engine.patients if item.id == patient_id), None)
+    if patient is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    return patient
+
+
+@app.post("/api/patients/{patient_id}/medications")
+async def api_add_medication(patient_id: str, body: MedicationIn):
+    _patient_or_404(patient_id)
+    if not body.medication_name.strip():
+        raise HTTPException(status_code=422, detail="Medication name is required")
+    medication_id = db.add_medication(engine.conn, {
+        "patient_id": patient_id,
+        "medication_name": body.medication_name.strip(),
+        "dosage": body.dosage.strip(),
+        "scheduled_time": body.scheduled_time.strip(),
+        "notes": body.notes.strip(),
+    })
+    await engine.broadcast()
+    return JSONResponse({"ok": True, "id": medication_id})
+
+
+@app.post("/api/medications/schedule")
+async def api_schedule_medication(body: MedicationScheduleIn):
+    _patient_or_404(body.patient_id)
+    medication_id = db.add_medication(engine.conn, {
+        "patient_id": body.patient_id, "medication_name": body.name,
+        "dosage": body.frequency, "scheduled_time": body.schedule_time,
+        "notes": body.instructions,
+    })
+    return JSONResponse({"ok": True, "id": medication_id})
+
+
+@app.post("/api/medications/emergency")
+async def api_emergency_medication(body: EmergencyMedicationIn):
+    _patient_or_404(body.patient_id)
+    medication_id = db.add_medication(engine.conn, {
+        "patient_id": body.patient_id, "medication_name": body.name,
+        "status": "given", "given_at": f"{body.given_date} {body.given_time}".strip(),
+        "notes": body.remarks,
+    })
+    return JSONResponse({"ok": True, "id": medication_id})
+
+
+@app.patch("/api/medications/{med_id}")
+async def api_update_medication(med_id: int, body: MedicationUpdateIn):
+    given_at = body.given_at or (datetime.now().isoformat() if body.status == "given" else None)
+    if not db.update_medication_status(engine.conn, med_id, body.status, given_at):
+        raise HTTPException(status_code=404, detail="Medication not found")
+    await engine.broadcast()
+    return JSONResponse({"ok": True})
+
+
+@app.patch("/api/medications/{med_id}/given")
+async def api_mark_medication_given(med_id: int):
+    if not db.update_medication_status(engine.conn, med_id, "given", datetime.now().isoformat()):
+        raise HTTPException(status_code=404, detail="Medication not found")
+    await engine.broadcast()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/patients/{patient_id}/notes")
+async def api_add_clinical_note(patient_id: str, body: ClinicalNoteIn):
+    _patient_or_404(patient_id)
+    if not body.content.strip():
+        raise HTTPException(status_code=422, detail="Note content is required")
+    note_id = db.add_clinical_note(engine.conn, {
+        "patient_id": patient_id,
+        "note_type": body.note_type,
+        "content": body.content.strip(),
+        "created_at": datetime.now().isoformat(),
+    })
+    await engine.broadcast()
+    return JSONResponse({"ok": True, "id": note_id})
+
+
+@app.post("/api/discharge/{patient_id}")
+async def api_discharge(patient_id: str, body: DischargeIn):
+    patient = _patient_or_404(patient_id)
+    if not body.discharge_summary.strip():
+        raise HTTPException(status_code=422, detail="Discharge summary is required")
+    now = datetime.now().isoformat()
+    db.add_clinical_note(engine.conn, {
+        "patient_id": patient_id, "note_type": "discharge_summary",
+        "content": body.discharge_summary.strip(), "created_at": now,
+    })
+    if body.follow_up_instructions.strip():
+        db.add_clinical_note(engine.conn, {
+            "patient_id": patient_id, "note_type": "follow_up",
+            "content": body.follow_up_instructions.strip(), "created_at": now,
+        })
+    patient.status = "discharged"
+    ward.release_bed_for(engine.beds, patient_id)
+    ward.release_clinician_for(engine.clinicians, patient_id)
+    await engine.broadcast()
+    return JSONResponse({"ok": True, "patient_id": patient_id, "status": patient.status})
 
 
 class WardStatusIn(BaseModel):

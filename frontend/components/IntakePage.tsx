@@ -140,6 +140,12 @@ export default function IntakePage() {
       ),
     }));
   }
+  function addLabRow() {
+    setPatientData((current) => ({
+      ...current,
+      test_results: [...current.test_results, { test_name: "", value: "", unit: "", reference_range: "", abnormality_flag: null }],
+    }));
+  }
   async function submit() {
     setMessage("Submitting patient intake...");
     try {
@@ -349,6 +355,9 @@ export default function IntakePage() {
               Upload reports sequentially, then review every extracted value.
             </p>
           </div>
+          <button className="secondary-action" type="button" onClick={addLabRow}>
+            + Add Lab Row
+          </button>
         </div>
         <div
           className={`intake-dropzone ${dragging ? "dragging" : ""}`}
