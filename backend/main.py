@@ -639,6 +639,38 @@ async def api_voice_intake(body: VoiceIntakeIn):
     return JSONResponse(out)
 
 
+class TranslateIn(BaseModel):
+    text: str
+    lang: str = ""
+
+
+@app.post("/api/translate")
+async def api_translate(body: TranslateIn):
+    """Backs inline dictation on the Patient Intake form (chief complaint,
+    nursing assessment) — the other place speech becomes text besides the
+    dedicated Voice Intake panel. Same translation requirement, no patient
+    to create here: just hand back English text for the nurse's own field."""
+    text = (body.text or "").strip()[:2000]
+    if not text:
+        return JSONResponse({"ok": False, "error": "Nothing to translate."})
+
+    try:
+        from .layers import nlp_llm
+    except ImportError:
+        from layers import nlp_llm  # type: ignore[no-redef]
+    if os.environ.get("PULSE_NLP_MODE") != "llm" or not nlp_llm.any_provider_configured():
+        return JSONResponse({"ok": False, "error": (
+            "Translation needs the LLM tier — set PULSE_NLP_MODE=llm and "
+            "GEMINI_API_KEY and/or GROQ_API_KEY, then restart PULSE.")})
+
+    loop = asyncio.get_running_loop()
+    translation = await loop.run_in_executor(
+        None, nlp_llm.translate_dictation, text, body.lang)
+    if translation is None:
+        return JSONResponse({"ok": False, "error": "Translation failed or timed out — try again."})
+    return JSONResponse({"ok": True, "translation": translation})
+
+
 @app.post("/api/ari")
 async def api_ari(body: ARIIn):
     """Calculate an ARI preview for a reviewed intake payload."""

@@ -106,6 +106,16 @@ def _call_llm(system: str, user: str) -> tuple[dict[str, Any] | None, str | None
     return None, None
 
 
+def call_llm_json(system: str, user: str) -> tuple[dict[str, Any] | None, str | None]:
+    """Public entry point for "ask the LLM tier for a JSON object, with the
+    same Gemini-then-Groq failover everything else in this module gets."
+    For call sites that don't fit the extract_llm / extract_voice_intake /
+    translate_dictation contracts (layer2b_labs.py's lab review is the
+    current example) but still shouldn't have to either duplicate the
+    failover logic or reach into a private function to get it."""
+    return _call_llm(system, user)
+
+
 # ----------------------------------------------------------- red-flag tier
 _EXTRACT_SYSTEM = """You are a clinical triage red-flag extractor. Given a \
 patient's own words or a caller/paramedic's account, identify which of these \
@@ -182,3 +192,38 @@ def extract_voice_intake(text: str, lang_hint: str = "") -> dict[str, Any] | Non
     parsed["complaint_summary"] = summary.strip()
     parsed["_provider"] = provider
     return parsed
+
+
+# --------------------------------------------------- dictation translation
+# The Voice Intake panel above is one of two places speech becomes text in
+# PULSE — the other is inline dictation into a free-text field on the
+# Patient Intake form (chief complaint, nursing assessment). That path has
+# no structure to extract (no age, no vitals, no chief-complaint summary to
+# write) — it is a straight transcript that gets appended verbatim to
+# whatever the nurse is typing. It still needs translating for exactly the
+# same reason Voice Intake does: a nurse reviewing the form afterwards has
+# to be able to read what got appended.
+_TRANSLATE_SYSTEM = """Translate the following clinical dictation into \
+natural, professional English suitable for an emergency department chart, \
+preserving every clinical detail — do not summarise or omit anything. If \
+it is already in English, return it lightly cleaned up (fix obvious \
+transcription errors) rather than unchanged verbatim.
+
+Respond with ONLY a compact JSON object, no markdown fences, no commentary: \
+{"translation": "<the translated text>"}"""
+
+
+def translate_dictation(text: str, lang_hint: str = "") -> str | None:
+    """Returns an English translation of free-text dictation, or None if
+    both providers are unconfigured or fail — callers must not fall back to
+    appending the untranslated text without telling the nurse that's what
+    happened, the same rule extract_voice_intake() enforces above."""
+    if not text or not any_provider_configured():
+        return None
+    parsed, _provider = _call_llm(_TRANSLATE_SYSTEM, text)
+    if parsed is None:
+        return None
+    translation = parsed.get("translation")
+    if not isinstance(translation, str) or not translation.strip():
+        return None
+    return translation.strip()
