@@ -30,6 +30,12 @@ class SimPatient:
     complaint: str
     arrive_min: float
     timeline: list[VitalsPoint]
+    name: str | None = None
+    sex: str | None = None
+    registration_no: str | None = None
+    referred_by: str | None = None
+    report_date: str | None = None
+    raw_intake: str | None = None
     nursing_assessment: str | None = ""
     transcript: str | None = None
     status: str = "inbound"
@@ -42,7 +48,7 @@ class SimPatient:
     seen_at_min: float | None = None
     seed_esi: str | None = None   # acuity already assigned before the shift
     lab_out: dict[str, Any] | None = None
-    lab_results: list[dict[str, Any]] | None = None
+    lab_results: list | None = None
     sirs_data: dict[str, Any] | None = None
 
     def vitals_at(self, t: float) -> dict[str, Any] | None:

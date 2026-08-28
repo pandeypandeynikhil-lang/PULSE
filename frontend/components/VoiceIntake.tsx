@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { sendVoice } from "@/lib/api";
+import { sendVoice, translateDictation } from "@/lib/api";
 import { IconMic } from "./Icons";
 
 const languages = [
@@ -87,8 +87,28 @@ export default function VoiceIntake({ onSent, onTranscript, submitToBackend = tr
     }
     if (recording) recognition.current?.stop();
     if (!submitToBackend) {
-      onTranscript?.(transcript);
-      setStatus("Dictation appended to the assessment.");
+      // This dictation lands directly in a chart field a nurse reads — the
+      // same reason Voice Intake proper translates before it will show
+      // anyone text. Always routed through translation, regardless of the
+      // language dropdown: the dropdown is what the *recognizer* used, not
+      // a guarantee of what the speaker actually said, and a Hindi speaker
+      // dictated against an English recognizer produces exactly the kind
+      // of garbled Latin-script mis-transcription that looks nothing like
+      // real English and would sail through untouched if we trusted the
+      // dropdown. The translation prompt already returns lightly-cleaned
+      // text unchanged when it genuinely is English, so this costs an
+      // extra round trip on true-English dictation and nothing else.
+      setStatus("Translating dictation...");
+      const result = await translateDictation(transcript, language);
+      if (result.ok && result.translation) {
+        onTranscript?.(result.translation);
+        setStatus("Dictation translated to English and appended.");
+      } else {
+        onTranscript?.(transcript);
+        setStatus(
+          `Translation unavailable — appended as recognised. ${result.error || "Review and translate before submitting."}`,
+        );
+      }
       setText("");
       return;
     }

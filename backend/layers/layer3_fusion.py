@@ -60,10 +60,18 @@ def fuse(vitals_out: dict[str, Any] | None,
         }
         for system in symptom_out.get("systems", []):
             matches = elevated_vitals.intersection(SYNERGY_MAP.get(system, set()))
-            if matches:
-                synergy_multiplier = 1.2
-                if system not in synergy_matches:
-                    synergy_matches.append(system)
+            if matches and system not in synergy_matches:
+                synergy_matches.append(system)
+    if synergy_matches:
+        # Graduated rather than a flat step: a single corroborating system
+        # (tachycardia alongside a chest-pain flag) keeps the original 1.2x.
+        # A second independently-corroborating system is more than twice as
+        # reassuring that the vitals and the complaint describe the same
+        # event, not a coincidence of two marginal signals — so it earns
+        # more, capped well short of the SIRS floor or lab multiplier so
+        # synergy alone can never substitute for either as the primary
+        # escalation path.
+        synergy_multiplier = min(1.1 + 0.1 * len(synergy_matches), 1.3)
 
     if parts:
         total = sum(weights)

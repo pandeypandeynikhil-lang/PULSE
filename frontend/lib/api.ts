@@ -1,4 +1,4 @@
-import type { BoardState, IntakePayload, LabReport } from "./types";
+import type { BoardState, IntakePayload, LabReport, Medication } from "./types";
 
 export const API_ORIGIN = process.env.NEXT_PUBLIC_API_ORIGIN || "http://127.0.0.1:8000";
 
@@ -10,6 +10,38 @@ export async function getBoard(): Promise<BoardState> {
 
 export async function post(path: string): Promise<void> {
   await fetch(`${API_ORIGIN}${path}`, { method: "POST" });
+}
+
+export async function scheduleMedication(patientId: string, medication: Omit<Medication, "id" | "status" | "given_at">) {
+  const response = await fetch(`${API_ORIGIN}/api/patients/${patientId}/medications`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(medication),
+  });
+  if (!response.ok) throw new Error("Unable to schedule medication.");
+}
+
+export async function updateMedication(medicationId: number, status: Medication["status"]) {
+  const response = await fetch(`${API_ORIGIN}/api/medications/${medicationId}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+  });
+  if (!response.ok) throw new Error("Unable to update medication.");
+}
+
+export async function addClinicalNote(patientId: string, noteType: "surgical" | "follow_up", content: string) {
+  const response = await fetch(`${API_ORIGIN}/api/patients/${patientId}/notes`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note_type: noteType, content }),
+  });
+  if (!response.ok) throw new Error("Unable to save clinical note.");
+}
+
+export async function dischargePatient(patientId: string, dischargeSummary: string, followUpInstructions: string) {
+  const response = await fetch(`${API_ORIGIN}/api/discharge/${patientId}`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ discharge_summary: dischargeSummary, follow_up_instructions: followUpInstructions }),
+  });
+  if (!response.ok) throw new Error("Unable to discharge patient.");
 }
 
 export async function getModel() {
@@ -26,6 +58,14 @@ export async function sendVoice(transcript: string, lang: string) {
     body: JSON.stringify({ transcript, lang }),
   });
   return response.json() as Promise<{ ok: boolean; error?: string; display_id?: string; complaint?: string; age?: number; provider?: string }>;
+}
+
+export async function translateDictation(text: string, lang: string) {
+  const response = await fetch(`${API_ORIGIN}/api/translate`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, lang }),
+  });
+  return response.json() as Promise<{ ok: boolean; error?: string; translation?: string }>;
 }
 
 export async function extractLab(file: File): Promise<LabReport> {
