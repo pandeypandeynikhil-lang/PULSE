@@ -113,6 +113,7 @@ a {
 .medication-sidebar-list {
   display: grid;
   gap: 10px;
+  padding: 6 9px;
 }
 .sidebar-medication {
   align-items: center;
@@ -138,43 +139,236 @@ a {
   font-family: var(--mono);
   font-size: 11px;
 }
-.patient-search-panel > input { background: var(--panel2); border: 1px solid var(--line); border-radius: 7px; color: var(--ink); padding: 10px 11px; width: 100%; }
-.history-row small { color: var(--mute); display: block; font-size: 11px; }
-.patient-search-panel, .profile-card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 22px; }
-.patient-search-results { margin-top: 12px; }
-.patient-search-results button { align-items: center; background: transparent; border: 0; border-bottom: 1px solid var(--line2); color: var(--ink); cursor: pointer; display: flex; justify-content: space-between; padding: 15px 8px; text-align: left; width: 100%; }
-.patient-search-results span, .patient-search-results small { display: grid; gap: 4px; }
-.patient-search-results small, .patient-search-results em { color: var(--mute); font-size: 11px; font-style: normal; }
-.profile-toolbar, .section-heading, .history-row { align-items: center; display: flex; gap: 14px; justify-content: space-between; }
-.profile-toolbar { margin-bottom: 22px; }
-.profile-toolbar button, .section-heading button, .profile-card button, .upload-button { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; color: var(--ink); cursor: pointer; font-size: 11px; font-weight: 700; padding: 9px 11px; }
-.profile-toolbar h1 { margin: 0; }
-.save-all { background: var(--purple) !important; color: white !important; }
-.profile-status { color: var(--purple); margin: -8px 0 16px; }
-.profile-grid { display: grid; gap: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 16px; }
-.profile-card { margin-bottom: 16px; }
-.profile-card h2 { color: var(--ink); font-family: var(--display); font-size: 18px; margin: 0 0 17px; }
-.profile-fields, .profile-vitals { display: grid; gap: 13px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.profile-fields label, .profile-vitals label { color: var(--mute); display: grid; font-size: 11px; gap: 6px; }
-.profile-fields textarea, .profile-fields input, .profile-fields select, .profile-vitals input, .table-row input, .table-row select, .inline-form input { background: var(--panel2); border: 1px solid var(--line); border-radius: 5px; color: var(--ink); font: inherit; font-size: 12px; min-width: 0; padding: 9px; }
-.profile-fields textarea { min-height: 78px; resize: vertical; }
-.profile-fields label:nth-last-child(-n+2) { grid-column: span 2; }
-.profile-vitals { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-.section-heading > div { align-items: center; display: flex; gap: 8px; }
-.upload-button input { display: none; }
-.editable-table { overflow-x: auto; }
-.table-head, .table-row { display: grid; gap: 7px; grid-template-columns: 1.4fr 1fr .8fr 1.2fr .7fr; min-width: 650px; padding: 5px 0; }
-.table-head { color: var(--mute); font-size: 10px; font-weight: 700; }
-.history-row { border-bottom: 1px solid var(--line2); padding: 11px 0; }
-.history-row em { color: #63bf82; font-size: 11px; font-style: normal; text-transform: capitalize; }
-.inline-form { display: grid; gap: 7px; grid-template-columns: 1fr 1fr 1fr auto; margin-top: 14px; }
-.profile-table { border-collapse: collapse; font-size: 12px; width: 100%; }
-.profile-table th, .profile-table td { border-bottom: 1px solid var(--line2); padding: 9px 7px; text-align: left; vertical-align: middle; }
-.profile-table th { color: var(--mute); font-size: 10px; font-weight: 700; }
-.profile-table td input { background: var(--panel2); border: 1px solid var(--line); border-radius: 5px; color: var(--ink); font: inherit; font-size: 12px; min-width: 0; padding: 8px; width: 100%; }
-.profile-table td button { white-space: nowrap; }
-.discharge-action { background: #9d3f4d !important; color: white !important; margin-top: 18px; padding: 12px 18px !important; }
-@media (max-width: 800px) { .profile-grid, .profile-fields, .profile-vitals { grid-template-columns: 1fr 1fr; } .profile-vitals label:last-child { grid-column: span 2; } .profile-toolbar { align-items: flex-start; flex-wrap: wrap; } .inline-form { grid-template-columns: 1fr 1fr; } }
+.patient-search-panel > input {
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--ink);
+  padding: 10px 11px;
+  width: 100%;
+}
+.history-row small {
+  color: var(--mute);
+  display: block;
+  font-size: 11px;
+}
+.patient-search-panel,
+.profile-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 22px;
+}
+.patient-search-results {
+  margin-top: 12px;
+}
+.patient-search-results button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line2);
+  color: var(--ink);
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  padding: 15px 8px;
+  text-align: left;
+  width: 100%;
+}
+.patient-search-results span,
+.patient-search-results small {
+  display: grid;
+  gap: 4px;
+}
+.patient-search-results small,
+.patient-search-results em {
+  color: var(--mute);
+  font-size: 11px;
+  font-style: normal;
+}
+.profile-toolbar,
+.section-heading,
+.history-row {
+  align-items: center;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+}
+.profile-toolbar {
+  margin-bottom: 22px;
+}
+.profile-toolbar button,
+.section-heading button,
+.profile-card button,
+.upload-button {
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 9px 11px;
+}
+.profile-toolbar h1 {
+  margin: 0;
+}
+.save-all {
+  background: var(--purple) !important;
+  color: white !important;
+}
+.profile-status {
+  color: var(--purple);
+  margin: -8px 0 16px;
+}
+.profile-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 16px;
+}
+.profile-card {
+  margin-bottom: 16px;
+}
+.profile-card h2 {
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 18px;
+  margin: 0 0 17px;
+}
+.profile-fields,
+.profile-vitals {
+  display: grid;
+  gap: 13px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.profile-fields label,
+.profile-vitals label {
+  color: var(--mute);
+  display: grid;
+  font-size: 11px;
+  gap: 6px;
+}
+.profile-fields textarea,
+.profile-fields input,
+.profile-fields select,
+.profile-vitals input,
+.table-row input,
+.table-row select,
+.inline-form input {
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  min-width: 0;
+  padding: 9px;
+}
+.profile-fields textarea {
+  min-height: 78px;
+  resize: vertical;
+}
+.profile-fields label:nth-last-child(-n + 2) {
+  grid-column: span 2;
+}
+.profile-vitals {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+.section-heading > div {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+.upload-button input {
+  display: none;
+}
+.editable-table {
+  overflow-x: auto;
+}
+.table-head,
+.table-row {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: 1.4fr 1fr 0.8fr 1.2fr 0.7fr;
+  min-width: 650px;
+  padding: 5px 0;
+}
+.table-head {
+  color: var(--mute);
+  font-size: 10px;
+  font-weight: 700;
+}
+.history-row {
+  border-bottom: 1px solid var(--line2);
+  padding: 11px 0;
+}
+.history-row em {
+  color: #63bf82;
+  font-size: 11px;
+  font-style: normal;
+  text-transform: capitalize;
+}
+.inline-form {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: 1fr 1fr 1fr auto;
+  margin-top: 14px;
+}
+.profile-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  width: 100%;
+}
+.profile-table th,
+.profile-table td {
+  border-bottom: 1px solid var(--line2);
+  padding: 9px 7px;
+  text-align: left;
+  vertical-align: middle;
+}
+.profile-table th {
+  color: var(--mute);
+  font-size: 10px;
+  font-weight: 700;
+}
+.profile-table td input {
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  min-width: 0;
+  padding: 8px;
+  width: 100%;
+}
+.profile-table td button {
+  white-space: nowrap;
+}
+.discharge-action {
+  background: #9d3f4d !important;
+  color: white !important;
+  margin-top: 18px;
+  padding: 12px 18px !important;
+}
+@media (max-width: 800px) {
+  .profile-grid,
+  .profile-fields,
+  .profile-vitals {
+    grid-template-columns: 1fr 1fr;
+  }
+  .profile-vitals label:last-child {
+    grid-column: span 2;
+  }
+  .profile-toolbar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .inline-form {
+    grid-template-columns: 1fr 1fr;
+  }
+}
 .nav-brand {
   display: flex;
   align-items: center;
