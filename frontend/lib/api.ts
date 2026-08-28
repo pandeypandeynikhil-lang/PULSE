@@ -60,6 +60,14 @@ export async function sendVoice(transcript: string, lang: string) {
   return response.json() as Promise<{ ok: boolean; error?: string; display_id?: string; complaint?: string; age?: number; provider?: string }>;
 }
 
+export async function translateDictation(text: string, lang: string) {
+  const response = await fetch(`${API_ORIGIN}/api/translate`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, lang }),
+  });
+  return response.json() as Promise<{ ok: boolean; error?: string; translation?: string }>;
+}
+
 export async function extractLab(file: File): Promise<LabReport> {
   const form = new FormData();
   form.append("file", file);

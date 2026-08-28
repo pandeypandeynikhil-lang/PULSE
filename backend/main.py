@@ -287,7 +287,11 @@ class Engine:
         vitals = {k: v for k, v in (raw.get("vitals") or {}).items()
                  if isinstance(v, (int, float))}
 
-        complaint = (raw.get("complaint_summary") or transcript[:80]).strip()
+        # nlp_llm.extract_voice_intake() already refuses to return a result
+        # with no complaint_summary, so this is never the original-language
+        # transcript falling through untranslated — see its docstring for
+        # why that distinction is the whole point of this code path.
+        complaint = raw["complaint_summary"]
 
         p = simulation.SimPatient(
             id=pid, display_id=display_id, age=age, arrival_mode="voice intake",
@@ -633,6 +637,38 @@ async def api_voice_intake(body: VoiceIntakeIn):
     if out.get("ok"):
         await engine.broadcast()
     return JSONResponse(out)
+
+
+class TranslateIn(BaseModel):
+    text: str
+    lang: str = ""
+
+
+@app.post("/api/translate")
+async def api_translate(body: TranslateIn):
+    """Backs inline dictation on the Patient Intake form (chief complaint,
+    nursing assessment) — the other place speech becomes text besides the
+    dedicated Voice Intake panel. Same translation requirement, no patient
+    to create here: just hand back English text for the nurse's own field."""
+    text = (body.text or "").strip()[:2000]
+    if not text:
+        return JSONResponse({"ok": False, "error": "Nothing to translate."})
+
+    try:
+        from .layers import nlp_llm
+    except ImportError:
+        from layers import nlp_llm  # type: ignore[no-redef]
+    if os.environ.get("PULSE_NLP_MODE") != "llm" or not nlp_llm.any_provider_configured():
+        return JSONResponse({"ok": False, "error": (
+            "Translation needs the LLM tier — set PULSE_NLP_MODE=llm and "
+            "GEMINI_API_KEY and/or GROQ_API_KEY, then restart PULSE.")})
+
+    loop = asyncio.get_running_loop()
+    translation = await loop.run_in_executor(
+        None, nlp_llm.translate_dictation, text, body.lang)
+    if translation is None:
+        return JSONResponse({"ok": False, "error": "Translation failed or timed out — try again."})
+    return JSONResponse({"ok": True, "translation": translation})
 
 
 @app.post("/api/ari")
