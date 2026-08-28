@@ -159,7 +159,16 @@ otherwise."""
 def extract_voice_intake(text: str, lang_hint: str = "") -> dict[str, Any] | None:
     """Translate + lightly structure a spoken account for the Voice Intake
     path. Returns None on any failure from both providers — the caller
-    reports a clear "voice intake unavailable" error rather than guessing."""
+    reports a clear "voice intake unavailable" error rather than guessing.
+
+    The one field this function refuses to let through unchecked is
+    `complaint_summary`: it is the English text a nurse who doesn't share
+    the patient's language is going to read on the decision console. If a
+    provider omits it (schema drift, a truncated response, a model that
+    just didn't comply), that must count as a failed translation — not
+    quietly fall back to the original-language transcript, which is exactly
+    the text a nurse in this scenario cannot read.
+    """
     if not text or not any_provider_configured():
         return None
     lang_note = f" (recognised as {lang_hint})" if lang_hint else ""
@@ -167,5 +176,9 @@ def extract_voice_intake(text: str, lang_hint: str = "") -> dict[str, Any] | Non
     parsed, provider = _call_llm(system, text)
     if parsed is None:
         return None
+    summary = parsed.get("complaint_summary")
+    if not isinstance(summary, str) or not summary.strip():
+        return None
+    parsed["complaint_summary"] = summary.strip()
     parsed["_provider"] = provider
     return parsed

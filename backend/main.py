@@ -287,7 +287,11 @@ class Engine:
         vitals = {k: v for k, v in (raw.get("vitals") or {}).items()
                  if isinstance(v, (int, float))}
 
-        complaint = (raw.get("complaint_summary") or transcript[:80]).strip()
+        # nlp_llm.extract_voice_intake() already refuses to return a result
+        # with no complaint_summary, so this is never the original-language
+        # transcript falling through untranslated — see its docstring for
+        # why that distinction is the whole point of this code path.
+        complaint = raw["complaint_summary"]
 
         p = simulation.SimPatient(
             id=pid, display_id=display_id, age=age, arrival_mode="voice intake",
