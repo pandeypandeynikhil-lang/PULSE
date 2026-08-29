@@ -5,13 +5,14 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { getBoard } from "@/lib/api";
 import type { BoardState } from "@/lib/types";
-import { IconDashboard, IconIntake, IconWard, PulseMark } from "./Icons";
+import { IconAmbulance, IconDashboard, IconIntake, IconWard, PulseMark } from "./Icons";
 
 const links = [
   { href: "/intake", label: "Patient Intake", Icon: IconIntake },
   { href: "/dashboard", label: "Triage Dashboard", Icon: IconDashboard },
   { href: "/patients", label: "Search/Edit Patient", Icon: IconDashboard },
   { href: "/ward", label: "Ward Map", Icon: IconWard },
+  { href: "/ambulances", label: "Ambulance Tracking", Icon: IconAmbulance },
 ];
 
 export default function NavigationSidebar() {

@@ -28,11 +28,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 try:
-    from . import db, simulation, ward
+    from . import ambulance, db, simulation, ward
     from .layers import (layer1_vitals, layer1b_heuristics, layer2_symptom_nlp, layer2b_labs,
                          layer3_fusion, layer4_deterioration, layer5_routing)
 except ImportError:
     # Supports `uvicorn main:app` when the working directory is backend/.
+    import ambulance  # type: ignore[no-redef]
     import db  # type: ignore[no-redef]
     import simulation  # type: ignore[no-redef]
     import ward  # type: ignore[no-redef]
@@ -60,6 +61,7 @@ class Engine:
         self.clients: set[WebSocket] = set()
         self.beds: list[ward.Bed] = []
         self.clinicians: list[ward.Clinician] = []
+        self.fleet: list[ambulance.Ambulance] = []
         self.events: list[dict[str, Any]] = []
         self.reset()
 
@@ -67,6 +69,9 @@ class Engine:
     def reset(self) -> None:
         self.conn = db.init(reset=True)
         self.patients = simulation.build_scenario()
+        # Reads the committed route cache only — no network call here, ever.
+        # See ambulance.py's module docstring for why that matters live.
+        self.fleet = ambulance.build_fleet()
         self.sim_minutes = 0.0
         self.beds, self.clinicians = ward.build_roster()
         self.events = []
@@ -432,6 +437,11 @@ class Engine:
             "clinicians": [{"id": c.id, "name": c.name, "specialty": c.specialty,
                             "status": c.status, "patient_id": c.patient_id}
                            for c in self.clinicians],
+            # Computed fresh every call, same as everything else in board() —
+            # position_at() is a pure function of sim_minutes and the fleet
+            # built once at reset(), so there's no separate per-tick update
+            # step to keep in sync with this.
+            "ambulances": [ambulance.position_at(a, self.sim_minutes) for a in self.fleet],
             "events": self.events[:14],
             "agreement": db.agreement_rate(self.conn),
             "model": layer1_vitals.model_metrics(),
