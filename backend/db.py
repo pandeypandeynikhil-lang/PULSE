@@ -71,15 +71,31 @@ CREATE TABLE IF NOT EXISTS decisions (
     final_esi TEXT,
     actor TEXT DEFAULT 'triage nurse'
 );
-CREATE TABLE IF NOT EXISTS medications (
+CREATE TABLE IF NOT EXISTS medication_orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    patient_id TEXT,
-    medication_name TEXT,
-    dosage TEXT,
-    scheduled_time TEXT,
-    status TEXT DEFAULT 'scheduled',
-    given_at TEXT,
-    notes TEXT
+    patient_id TEXT NOT NULL,
+    medication_name TEXT NOT NULL,
+    dosage TEXT DEFAULT '',
+    frequency TEXT DEFAULT '',
+    route TEXT DEFAULT '',
+    prescriber TEXT DEFAULT '',
+    scheduled_time TEXT DEFAULT '',
+    start_time TEXT,
+    stop_time TEXT,
+    notes TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS medication_administrations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL,
+    administered_at TEXT NOT NULL,
+    scheduled_slot TEXT NOT NULL,
+    actor_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('given', 'held', 'refused', 'not_available', 'cancelled')),
+    dose_given TEXT DEFAULT '',
+    route TEXT DEFAULT '',
+    reason TEXT,
+    FOREIGN KEY (order_id) REFERENCES medication_orders(id),
+    UNIQUE(order_id, scheduled_slot)
 );
 CREATE TABLE IF NOT EXISTS clinical_notes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,7 +117,7 @@ def connect() -> sqlite3.Connection:
 def init(reset: bool = False) -> sqlite3.Connection:
     conn = connect()
     if reset:
-        for table in ("clinical_notes", "medications", "decisions", "recommendations", "scores", "patients"):
+        for table in ("clinical_notes", "medication_administrations", "medication_orders", "medications", "decisions", "recommendations", "scores", "patients"):
             conn.execute(f"DROP TABLE IF EXISTS {table}")
         conn.commit()
     conn.executescript(SCHEMA)
@@ -147,65 +163,121 @@ def score_history(conn, patient_id: str, limit: int = 12) -> list[dict]:
     return [dict(r) for r in rows][-limit:]
 
 
+def first_score(conn, patient_id: str) -> dict[str, Any] | None:
+    """Get the initial/triage score (first score recorded for a patient)."""
+    row = conn.execute(
+        "SELECT at, ari, esi, confidence, payload FROM scores WHERE patient_id=? ORDER BY at ASC LIMIT 1",
+        (patient_id,)).fetchone()
+    if not row:
+        return None
+    data = dict(row)
+    try:
+        data["payload"] = json.loads(data.get("payload") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        data["payload"] = {}
+    return data
+
+
 def add_medication(conn, data: dict[str, Any]) -> int:
     cur = conn.execute(
-        """INSERT INTO medications
-           (patient_id, medication_name, dosage, scheduled_time, status, given_at, notes)
-           VALUES (?,?,?,?,?,?,?)""",
-        (data.get("patient_id"), data.get("medication_name"), data.get("dosage"),
-         data.get("scheduled_time"), data.get("status", "scheduled"),
-         data.get("given_at"), data.get("notes")),
+          """INSERT INTO medication_orders
+              (patient_id, medication_name, dosage, frequency, route, prescriber,
+                scheduled_time, start_time, stop_time, notes)
+              VALUES (?,?,?,?,?,?,?,?,?,?)""",
+          (data.get("patient_id"), data.get("medication_name"), data.get("dosage", ""),
+            data.get("frequency", ""), data.get("route", ""), data.get("prescriber", ""),
+            data.get("scheduled_time", ""), data.get("start_time"), data.get("stop_time"),
+            data.get("notes", "")),
     )
     conn.commit()
     return int(cur.lastrowid)
 
 
-def update_medication_status(conn, med_id: int, status: str,
-                             given_at: str | None) -> bool:
+def medication_belongs_to_patient(conn, med_id: int, patient_id: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM medication_orders WHERE id=? AND patient_id=?",
+        (med_id, patient_id),
+    ).fetchone() is not None
+
+
+def update_medication_order(conn, med_id: int, patient_id: str,
+                                     data: dict[str, Any]) -> bool:
+     cur = conn.execute(
+          """UPDATE medication_orders SET medication_name=?, dosage=?, frequency=?,
+              route=?, prescriber=?, scheduled_time=?, start_time=?, stop_time=?, notes=?
+              WHERE id=? AND patient_id=?""",
+          (data.get("medication_name", ""), data.get("dosage", ""), data.get("frequency", ""),
+            data.get("route", ""), data.get("prescriber", ""), data.get("scheduled_time", ""),
+            data.get("start_time"), data.get("stop_time"), data.get("notes", ""), med_id, patient_id),
+     )
+     conn.commit()
+     return cur.rowcount > 0
+
+
+def add_medication_administration(conn, order_id: int, data: dict[str, Any]) -> int | None:
     cur = conn.execute(
-        "UPDATE medications SET status=?, given_at=? WHERE id=?",
-        (status, given_at, med_id),
+        """INSERT OR IGNORE INTO medication_administrations
+              (order_id, administered_at, scheduled_slot, actor_id, status, dose_given, route, reason)
+              VALUES (?,?,?,?,?,?,?,?)""",
+          (order_id, data["administered_at"], data["scheduled_slot"], data["actor_id"], data["status"],
+         data.get("dose_given", ""), data.get("route", ""), data.get("reason")),
     )
     conn.commit()
-    return cur.rowcount > 0
+    return int(cur.lastrowid) if cur.rowcount else None
 
 
 def get_medications(conn, patient_id: str) -> list[dict[str, Any]]:
     rows = conn.execute(
-        "SELECT id, patient_id, medication_name, dosage, scheduled_time, status, given_at, notes "
-        "FROM medications WHERE patient_id=? ORDER BY scheduled_time, id",
+                """SELECT o.id, o.patient_id, o.medication_name, o.dosage, o.frequency,
+                                    o.route, o.prescriber, o.scheduled_time, o.start_time,
+                                    o.stop_time, o.notes,
+                                    COALESCE(a.status, 'scheduled') AS status,
+                                    a.administered_at AS given_at, a.actor_id, a.dose_given,
+                                    a.reason AS administration_reason
+                     FROM medication_orders o
+                     LEFT JOIN medication_administrations a ON a.id = (
+                         SELECT a2.id FROM medication_administrations a2
+                         WHERE a2.order_id=o.id ORDER BY a2.administered_at DESC, a2.id DESC LIMIT 1
+                     )
+                     WHERE o.patient_id=? ORDER BY o.scheduled_time, o.id""",
         (patient_id,),
     ).fetchall()
     return [dict(row) for row in rows]
 
 
 def replace_medications(conn, patient_id: str, medications: list[dict[str, Any]]) -> None:
-    """Replace a patient's medication draft while preserving existing rows when possible."""
+    """Replace medication orders without changing their administration history."""
     existing = {row["id"] for row in conn.execute(
-        "SELECT id FROM medications WHERE patient_id=?", (patient_id,)
+        "SELECT id FROM medication_orders WHERE patient_id=?", (patient_id,)
     ).fetchall()}
     kept: set[int] = set()
     for medication in medications:
         medication_id = medication.get("id")
         values = (medication.get("medication_name") or medication.get("name"),
-                  medication.get("dosage") or medication.get("frequency"),
-                  medication.get("scheduled_time") or medication.get("schedule_time"),
-                  medication.get("status", "scheduled"), medication.get("given_at"),
-                  medication.get("notes") or medication.get("instructions"))
+              medication.get("dosage", ""), medication.get("frequency", ""),
+              medication.get("route", ""), medication.get("prescriber", ""),
+              medication.get("scheduled_time") or medication.get("schedule_time"),
+              medication.get("start_time"), medication.get("stop_time"),
+              medication.get("notes") or medication.get("instructions", ""))
         if medication_id in existing:
             conn.execute(
-                "UPDATE medications SET medication_name=?, dosage=?, scheduled_time=?, status=?, given_at=?, notes=? WHERE id=? AND patient_id=?",
-                (*values, medication_id, patient_id),
+                                """UPDATE medication_orders SET medication_name=?, dosage=?, frequency=?,
+                                     route=?, prescriber=?, scheduled_time=?, start_time=?, stop_time=?, notes=?
+                                     WHERE id=? AND patient_id=?""",
+                                (*values, medication_id, patient_id),
             )
             kept.add(medication_id)
         else:
             conn.execute(
-                "INSERT INTO medications (patient_id, medication_name, dosage, scheduled_time, status, given_at, notes) VALUES (?,?,?,?,?,?,?)",
+                """INSERT INTO medication_orders
+                   (patient_id, medication_name, dosage, frequency, route, prescriber,
+                    scheduled_time, start_time, stop_time, notes)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 (patient_id, *values),
             )
     stale = existing - kept
     if stale:
-        conn.executemany("DELETE FROM medications WHERE id=? AND patient_id=?",
+        conn.executemany("DELETE FROM medication_orders WHERE id=? AND patient_id=?",
                          [(medication_id, patient_id) for medication_id in stale])
     conn.commit()
 

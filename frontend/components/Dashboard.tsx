@@ -32,11 +32,12 @@ export default function Dashboard() {
     <>
       <Header onAction={refresh} />
       <main className="grid">
-        <LiveBoard patients={state.rows} onOpen={setOpen} />
-        <Sidebar state={state} />
+        <LiveBoard patients={state.rows} onOpen={setOpen} engineTime={state.engine.current_time} />
+        <Sidebar state={state} onRefresh={refresh} />
       </main>
       <PatientDrawer
         patient={patient}
+        engineTime={state.engine.current_time}
         onClose={() => setOpen(null)}
         onAction={refresh}
       />
