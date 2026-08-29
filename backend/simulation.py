@@ -43,6 +43,7 @@ class SimPatient:
     pathway: str | None = None
     specialty: str | None = None
     arrived_at_min: float | None = None
+    arrival_time: float | None = None
     last_recommendation: int | None = None
     escalated: bool = False
     seen_at_min: float | None = None
@@ -51,15 +52,10 @@ class SimPatient:
     lab_results: list | None = None
     sirs_data: dict[str, Any] | None = None
 
-    def vitals_at(self, t: float) -> dict[str, Any] | None:
-        if self.arrived_at_min is None:
+    def vitals_at(self, now: float) -> dict[str, Any] | None:
+        if self.arrival_time is None:
             return None
-        # Patients already in the room when the shift starts have their
-        # observation timeline anchored to t=0, not to their arrival 46 minutes
-        # ago — otherwise their whole trajectory would have played out before
-        # anyone was watching, which is the opposite of the point.
-        anchor = max(self.arrived_at_min, 0.0)
-        rel = t - anchor
+        rel = max(0.0, (now - self.arrival_time) / 60.0)
         if rel < self.timeline[0].at_min:
             return None
 

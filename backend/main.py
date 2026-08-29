@@ -22,7 +22,7 @@ load_dotenv()  # reads .env into os.environ, if present — before anything
                # below reads GEMINI_API_KEY / GROQ_API_KEY / PULSE_NLP_MODE.
                # Safe no-op if there is no .env: PULSE runs offline by default.
 
-from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -67,12 +67,14 @@ class Engine:
     def reset(self) -> None:
         self.conn = db.init(reset=True)
         self.patients = simulation.build_scenario()
+        self.started_at = time.time()
         self.sim_minutes = 0.0
         self.beds, self.clinicians = ward.build_roster()
         self.events = []
         self.voice_seq = 0    # counts Voice Intake patients created this shift
         self.intake_seq = 0   # counts structured-intake patients this shift
         for p in self.patients:
+            p.arrival_time = self.started_at + (p.arrive_min * 60.0)
             if p.arrive_min <= 0:
                 p.status = "waiting"
                 p.arrived_at_min = p.arrive_min
@@ -81,9 +83,10 @@ class Engine:
             db.add_patient(self.conn, {
                 "id": p.id, "display_id": p.display_id, "age": p.age,
                 "arrival_mode": p.arrival_mode, "complaint": p.complaint,
-                "transcript": p.transcript, "arrived_at": p.arrive_min,
+                "transcript": p.transcript,
                 "nursing_assessment": p.nursing_assessment,
-                "status": p.status, "assigned_esi": p.assigned_esi})
+                "status": p.status, "assigned_esi": p.assigned_esi,
+                "arrived_at": p.arrival_time})
 
     def log(self, kind: str, text: str, patient: str | None = None) -> None:
         self.events.insert(0, {"at": datetime.now().strftime("%H:%M:%S"), "kind": kind,
@@ -92,9 +95,11 @@ class Engine:
 
     # ------------------------------------------------------------- pipeline
     def score_patient(self, p: simulation.SimPatient) -> dict[str, Any] | None:
+        now = time.time()
+        elapsed_minutes = (now - self.started_at) / 60.0
         symptom = layer2_symptom_nlp.score(
             p.complaint or "", p.nursing_assessment or "")
-        vitals_raw = p.vitals_at(self.sim_minutes)
+        vitals_raw = p.vitals_at(now)
         sirs_data = layer1b_heuristics.evaluate_sirs(vitals_raw or {}, p.lab_results)
         vitals_out = layer1_vitals.score(vitals_raw) if vitals_raw else None
         fused = layer3_fusion.fuse(vitals_out, symptom, p.age, p.lab_out, sirs_data)
@@ -104,14 +109,14 @@ class Engine:
         # in noise; Layer 4 needs spaced observations, not a high-frequency log.
         prev = db.last_score(self.conn, p.id)
         if (prev is None or prev["ari"] != fused["ari"]
-                or self.sim_minutes - prev["at"] >= 4.0):
-            db.append_score(self.conn, p.id, self.sim_minutes, fused,
+                or elapsed_minutes - prev["at"] >= 4.0):
+            db.append_score(self.conn, p.id, elapsed_minutes, fused,
                             {"vitals": vitals_raw, "vitals_out": vitals_out,
                              "symptom": symptom, "labs": p.lab_out,
                              "sirs": sirs_data})
 
         history = db.score_history(self.conn, p.id)
-        waited = (self.sim_minutes - (p.arrived_at_min or 0))
+        waited = max(0.0, (now - (p.arrival_time or now)) / 60.0)
         trend = layer4_deterioration.assess(history, waited)
         systems = symptom["systems"]
         routing = layer5_routing.route(fused["esi"], systems, self.beds, self.clinicians)
@@ -122,7 +127,7 @@ class Engine:
 
     # ----------------------------------------------------------------- tick
     async def tick(self) -> None:
-        self.sim_minutes += (60 * TICK_SECONDS) / 60.0
+        self.sim_minutes = (time.time() - self.started_at) / 60.0
         t = self.sim_minutes
 
         for p in self.patients:
@@ -238,7 +243,7 @@ class Engine:
         p.seen_at_min = self.sim_minutes
         self.log("treatment",
                  f"{p.display_id} moved to {p.pathway or 'treatment'} "
-                 f"— door-to-provider {int(self.sim_minutes - (p.arrived_at_min or 0))} min",
+                 f"— door-to-provider {int(max(0.0, (time.time() - (p.arrival_time or time.time())) / 60.0))} min",
                  p.display_id)
         return {"ok": True}
 
@@ -299,12 +304,13 @@ class Engine:
             timeline=[simulation.VitalsPoint(0.0, vitals)], transcript=transcript)
         p.status = "waiting"
         p.arrived_at_min = self.sim_minutes
+        p.arrival_time = time.time()
         self.patients.append(p)
 
         db.add_patient(self.conn, {
             "id": p.id, "display_id": p.display_id, "age": p.age,
             "arrival_mode": p.arrival_mode, "complaint": p.complaint,
-            "transcript": p.transcript, "arrived_at": p.arrived_at_min,
+            "transcript": p.transcript, "arrived_at": p.arrival_time,
             "nursing_assessment": p.nursing_assessment,
             "status": p.status, "assigned_esi": p.assigned_esi})
 
@@ -353,12 +359,13 @@ class Engine:
             lab_results=labs)
         p.status = "waiting"
         p.arrived_at_min = self.sim_minutes
+        p.arrival_time = time.time()
         self.patients.append(p)
 
         db.add_patient(self.conn, {
             "id": p.id, "display_id": p.display_id, "age": p.age,
             "arrival_mode": p.arrival_mode, "complaint": p.complaint,
-            "transcript": p.transcript, "arrived_at": p.arrived_at_min,
+            "transcript": p.transcript, "arrived_at": p.arrival_time,
             "status": p.status, "assigned_esi": p.assigned_esi,
             "name": p.name, "sex": p.sex, "registration_no": p.registration_no,
             "referred_by": p.referred_by, "report_date": p.report_date,
@@ -390,6 +397,14 @@ class Engine:
             # Get initial/triage vitals for delta calculation
             triage_score = db.first_score(self.conn, p.id)
             triage_vitals = triage_score.get("payload", {}).get("vitals") if triage_score else None
+            current_vitals = res["vitals"] or {}
+            vital_deltas = {
+                key: round(current_vitals[key] - triage_vitals[key], 1)
+                for key in current_vitals
+                if triage_vitals and key in triage_vitals
+                and isinstance(current_vitals[key], (int, float))
+                and isinstance(triage_vitals[key], (int, float))
+            }
             
             rows.append({
                 "id": p.id, "display_id": p.display_id, "age": p.age,
@@ -401,6 +416,7 @@ class Engine:
                 "complaint": p.complaint, "transcript": p.transcript,
                 "nursing_assessment": p.nursing_assessment,
                 "arrival_mode": p.arrival_mode,
+                "arrival_time": p.arrival_time,
                 "status": p.status, "assigned_esi": p.assigned_esi,
                 "ari": res["fused"]["ari"], "esi": res["fused"]["esi"],
                 "lab_evaluation": res["fused"]["components"].get("labs"),
@@ -409,6 +425,7 @@ class Engine:
                 "confidence": res["fused"]["confidence"],
                 "waited": round(res["waited"], 1),
                 "trace": [h["ari"] for h in res["history"]][-10:],
+                "score_history": [h["ari"] for h in res["history"]],
                 "trend": res["trend"],
                 "pending": p.last_recommendation is not None,
                 "pathway": p.pathway or res["routing"]["pathway"],
@@ -416,6 +433,7 @@ class Engine:
                 "routing": res["routing"],
                 "vitals": res["vitals"],
                 "triage_vitals": triage_vitals or {},
+                "vital_deltas": vital_deltas,
                 "drivers": res["vitals_out"]["drivers"] if res["vitals_out"] else [],
                 "vitals_present": res["vitals_out"]["vitals_present"] if res["vitals_out"] else 0,
                 "spans": res["symptom"]["spans"],
@@ -427,6 +445,7 @@ class Engine:
         rows.sort(key=lambda r: (order.get(r["assigned_esi"] or r["esi"], 5), -r["ari"]))
         return {
             "sim_minutes": round(self.sim_minutes, 1),
+            "engine": {"current_time": time.time()},
             "rows": rows,
             "capacity": ward.capacity_summary(self.beds, self.clinicians),
             # Full roster, not just the aggregate above — the Ward Map page
@@ -579,13 +598,29 @@ class IntakeIn(BaseModel):
 class MedicationIn(BaseModel):
     medication_name: str
     dosage: str = ""
+    frequency: str = ""
+    route: str = ""
+    prescriber: str = ""
     scheduled_time: str = ""
     notes: str = ""
 
 
+class MedicationOrderUpdateIn(MedicationIn):
+    pass
+
+
 class MedicationUpdateIn(BaseModel):
-    status: Literal["scheduled", "given", "held", "cancelled"]
-    given_at: str | None = None
+    status: Literal["given", "held", "refused", "not_available", "cancelled"]
+    reason: str | None = None
+    dose_given: str = ""
+    route: str = ""
+
+
+class MedicationAdministrationIn(BaseModel):
+    status: Literal["given", "held", "refused", "not_available", "cancelled"]
+    reason: str | None = None
+    dose_given: str = ""
+    route: str = ""
 
 
 class ClinicalNoteIn(BaseModel):
@@ -798,11 +833,25 @@ async def api_add_medication(patient_id: str, body: MedicationIn):
         "patient_id": patient_id,
         "medication_name": body.medication_name.strip(),
         "dosage": body.dosage.strip(),
+        "frequency": body.frequency.strip(), "route": body.route.strip(),
+        "prescriber": body.prescriber.strip(),
         "scheduled_time": body.scheduled_time.strip(),
         "notes": body.notes.strip(),
     })
     await engine.broadcast()
     return JSONResponse({"ok": True, "id": medication_id})
+
+
+@app.patch("/api/patients/{patient_id}/medications/{med_id}/order")
+async def api_update_medication_order(patient_id: str, med_id: int,
+                                      body: MedicationOrderUpdateIn):
+    _patient_or_404(patient_id)
+    if not db.medication_belongs_to_patient(engine.conn, med_id, patient_id):
+        raise HTTPException(status_code=403, detail="Medication does not belong to patient")
+    if not db.update_medication_order(engine.conn, med_id, patient_id, body.model_dump()):
+        raise HTTPException(status_code=404, detail="Medication order not found")
+    await engine.broadcast()
+    return JSONResponse({"ok": True})
 
 
 @app.post("/api/medications/schedule")
@@ -821,25 +870,53 @@ async def api_emergency_medication(body: EmergencyMedicationIn):
     _patient_or_404(body.patient_id)
     medication_id = db.add_medication(engine.conn, {
         "patient_id": body.patient_id, "medication_name": body.name,
-        "status": "given", "given_at": f"{body.given_date} {body.given_time}".strip(),
         "notes": body.remarks,
+    })
+    db.add_medication_administration(engine.conn, medication_id, {
+        "administered_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "scheduled_slot": datetime.utcnow().strftime("%Y-%m-%dT%H:%M"),
+        "actor_id": "demo-nurse", "status": "given", "dose_given": "",
+        "route": "", "reason": body.remarks,
     })
     return JSONResponse({"ok": True, "id": medication_id})
 
 
-@app.patch("/api/medications/{med_id}")
-async def api_update_medication(med_id: int, body: MedicationUpdateIn):
-    given_at = body.given_at or (datetime.now().isoformat() if body.status == "given" else None)
-    if not db.update_medication_status(engine.conn, med_id, body.status, given_at):
-        raise HTTPException(status_code=404, detail="Medication not found")
+def _record_administration(patient_id: str, med_id: int, status: str,
+                           reason: str | None, dose_given: str, route: str,
+                           actor_id: str) -> int:
+    _patient_or_404(patient_id)
+    if not db.medication_belongs_to_patient(engine.conn, med_id, patient_id):
+        raise HTTPException(status_code=403, detail="Medication does not belong to patient")
+    if status in ("held", "refused") and not (reason or "").strip():
+        raise HTTPException(status_code=422, detail="A reason is required for held or refused doses")
+    administration_id = db.add_medication_administration(engine.conn, med_id, {
+        "administered_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "scheduled_slot": datetime.utcnow().strftime("%Y-%m-%dT%H:%M"),
+        "actor_id": actor_id.strip() or "demo-nurse",
+        "status": status,
+        "dose_given": dose_given.strip(),
+        "route": route.strip(),
+        "reason": reason.strip() if reason else None,
+    })
+    if administration_id is None:
+        raise HTTPException(status_code=409, detail="This medication order already has an administration record")
+    return administration_id
+
+
+@app.patch("/api/patients/{patient_id}/medications/{med_id}")
+async def api_update_medication(patient_id: str, med_id: int,
+                                body: MedicationUpdateIn,
+                                x_actor_id: str = Header(default="demo-nurse")):
+    _record_administration(patient_id, med_id, body.status, body.reason,
+                           body.dose_given, body.route, x_actor_id)
     await engine.broadcast()
     return JSONResponse({"ok": True})
 
 
-@app.patch("/api/medications/{med_id}/given")
-async def api_mark_medication_given(med_id: int):
-    if not db.update_medication_status(engine.conn, med_id, "given", datetime.now().isoformat()):
-        raise HTTPException(status_code=404, detail="Medication not found")
+@app.patch("/api/patients/{patient_id}/medications/{med_id}/given")
+async def api_mark_medication_given(patient_id: str, med_id: int,
+                                    x_actor_id: str = Header(default="demo-nurse")):
+    _record_administration(patient_id, med_id, "given", None, "", "", x_actor_id)
     await engine.broadcast()
     return JSONResponse({"ok": True})
 

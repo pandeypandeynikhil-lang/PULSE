@@ -17,15 +17,29 @@ export async function scheduleMedication(patientId: string, medication: Omit<Med
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(medication),
   });
-  if (!response.ok) throw new Error("Unable to schedule medication.");
+  if (!response.ok) {
+    throw new Error("Unable to schedule medication.");
+  }
+  return response.json() as Promise<{ ok: boolean; id: number }>;
 }
 
-export async function updateMedication(medicationId: number, status: Medication["status"]) {
-  const response = await fetch(`${API_ORIGIN}/api/medications/${medicationId}`, {
+export async function administerMedication(patientId: string, medicationId: number, status: "given" | "held" | "refused" | "not_available" | "cancelled", reason?: string) {
+  const isGiven = status === "given";
+  const response = await fetch(`${API_ORIGIN}/api/patients/${patientId}/medications/${medicationId}${isGiven ? "/given" : ""}`, {
     method: "PATCH", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ status }),
+    body: isGiven ? undefined : JSON.stringify({ status, reason }),
   });
-  if (!response.ok) throw new Error("Unable to update medication.");
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || "Unable to record medication administration.");
+  }
+}
+
+export async function updateMedicationOrder(patientId: string, medicationId: number, medication: Omit<Medication, "id" | "status" | "given_at">) {
+  const response = await fetch(`${API_ORIGIN}/api/patients/${patientId}/medications/${medicationId}/order`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(medication),
+  });
+  if (!response.ok) throw new Error("Unable to update medication order.");
 }
 
 export async function addClinicalNote(patientId: string, noteType: "surgical" | "follow_up", content: string) {

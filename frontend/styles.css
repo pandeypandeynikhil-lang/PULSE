@@ -139,6 +139,35 @@ a {
   font-family: var(--mono);
   font-size: 11px;
 }
+.medication-sidebar-action { align-items: center; display: flex; flex-direction: column; gap: 5px; }
+.medication-sidebar-action button { background: var(--purple); border: 0; border-radius: 5px; color: white; cursor: pointer; font-size: 10px; font-weight: 700; padding: 6px 9px; }
+.medication-sidebar-action button:hover { filter: brightness(1.12); }
+.med-given-button { font-size: 10px; padding: 4px 7px; }
+.med-confirm-button, .med-remove-button { font-size: 10px; padding: 4px 7px; }
+.med-remove-button { color: #c0445b; }
+.modal-backdrop {
+  align-items: center;
+  background: rgb(10 12 20 / 70%);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  position: fixed;
+  z-index: 20;
+}
+.verification-modal {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 30%);
+  max-width: 520px;
+  padding: 24px;
+  width: calc(100% - 32px);
+}
+.verification-list { display: grid; gap: 8px; margin: 18px 0; }
+.verification-list div { display: flex; gap: 12px; justify-content: space-between; }
+.verification-list dt { color: var(--mute); }
+.verification-list dd { margin: 0; text-align: right; }
+.modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
 .patient-search-panel > input {
   background: var(--panel2);
   border: 1px solid var(--line);

@@ -2,10 +2,13 @@ import type { Patient } from "@/lib/types";
 
 function Sparkline({ values, alert }: { values: number[]; alert: boolean }) {
   if (values.length < 2) return <span className="pill">-</span>;
+  const minimum = Math.min(...values);
+  const maximum = Math.max(...values);
+  const range = Math.max(maximum - minimum, 1);
   const points = values
     .map(
       (value, index) =>
-        `${(index / (values.length - 1)) * 86},${24 - (value / 100) * 24}`,
+        `${(index / (values.length - 1)) * 86},${22 - ((value - minimum) / range) * 20}`,
     )
     .join(" ");
   return (
@@ -56,11 +59,11 @@ function actionFor(patient: Patient, onOpen: (id: string) => void) {
 export default function LiveBoard({
   patients,
   onOpen,
-  simMinutes,
+  engineTime,
 }: {
   patients: Patient[];
   onOpen: (id: string) => void;
-  simMinutes?: number;
+  engineTime: number;
 }) {
   return (
     <section className="panel board">
@@ -84,6 +87,8 @@ export default function LiveBoard({
       <div className="rows">
         {patients.map((patient) => {
           const alert = patient.pending && Boolean(patient.assigned_esi);
+          const history = patient.score_history ?? patient.trace;
+          const escalating = history.length > 1 && history[history.length - 1] - history[0] >= 5;
           return (
             <div
               className={`row ${alert ? "alert" : ""} ${patient.status === "in-treatment" ? "treat" : ""}`}
@@ -104,11 +109,11 @@ export default function LiveBoard({
               <div className="ari">{patient.ari}</div>
               <div>
                 <Sparkline
-                  values={patient.trace}
-                  alert={Boolean(patient.trend?.rising)}
+                  values={history}
+                  alert={escalating}
                 />
               </div>
-              <div className="wait">{Math.round(patient.waited)}m</div>
+              <div className="wait">{Math.max(0, Math.round((engineTime - patient.arrival_time) / 60))}m</div>
               <div className="rowact">{actionFor(patient, onOpen)}</div>
             </div>
           );

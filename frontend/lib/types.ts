@@ -4,7 +4,6 @@ export interface Span {
   text: string;
   label?: string;
 }
-
 export interface Trend { rising: boolean; escalate: boolean; reason?: string; trace?: number[] }
 export interface Vital { [key: string]: number | null | undefined }
 export interface Driver { label: string; value?: string | number; direction: string; contribution: number }
@@ -20,8 +19,8 @@ export interface Routing {
 export interface Patient {
   id: string; display_id: string; age: number | null; complaint: string; transcript?: string;
   name?: string; sex?: string; registration_no?: string; lab_results?: any[];
-  arrival_mode: string; status: string; assigned_esi?: string | null; esi: string;
-  ari: number; waited: number; trace: number[]; trend: Trend; pending: boolean;
+  arrival_mode: string; arrival_time: number; status: string; assigned_esi?: string | null; esi: string;
+  ari: number; waited: number; trace: number[]; score_history?: number[]; trend: Trend; pending: boolean;
   confidence: string; pathway: string; routing: Routing;
   lab_evaluation?: { multiplier: number; reason: string | null } | null;
   medications?: Medication[];
@@ -30,6 +29,7 @@ export interface Patient {
   synergy_matched?: string[] | null;
   vitals: Vital; vitals_present: number; drivers: Driver[]; spans: Span[]; nlp_source?: string;
   triage_vitals?: Vital;
+  vital_deltas?: Vital;
   escalation_reason?: string | null;
 }
 
@@ -38,8 +38,14 @@ export interface Medication {
   medication_name: string;
   dosage: string;
   scheduled_time: string;
-  status: "scheduled" | "given" | "held" | "cancelled";
+  frequency?: string;
+  route?: string;
+  prescriber?: string;
+  status: "scheduled" | "given" | "held" | "refused" | "not_available" | "cancelled";
   given_at?: string | null;
+  actor_id?: string;
+  dose_given?: string;
+  administration_reason?: string | null;
   notes?: string | null;
 }
 
@@ -64,6 +70,7 @@ export interface Clinician {
 export interface BoardState {
   rows: Patient[];
   sim_minutes: number;
+  engine: { current_time: number };
   capacity: { beds: Record<string, number>; specialists: Record<string, number>; staff_on: number };
   beds: Bed[];
   clinicians: Clinician[];

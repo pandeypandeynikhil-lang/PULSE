@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { API_ORIGIN } from "@/lib/api";
+import { API_ORIGIN, administerMedication, scheduleMedication } from "@/lib/api";
 import type { ClinicalNote, Medication, TestResult } from "@/lib/types";
 
 type Profile = {
@@ -51,6 +51,44 @@ const vitalKeys = [
   "temperature",
 ];
 
+function toDateTimeLocal(value?: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return "Date not recorded";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
+
+function toScheduledDateTimeLocal(value?: string | null) {
+  if (!value) return "";
+  const parsed = value.includes("T")
+    ? new Date(value)
+    : new Date(`${new Date().toISOString().slice(0, 10)}T${value}`);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}T${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`;
+}
+
+function medicationDueState(value: string): "overdue" | "due-now" | "upcoming" {
+  if (!value) return "upcoming";
+  const scheduled = new Date(value.includes("T") ? value : `${new Date().toISOString().slice(0, 10)}T${value}`);
+  if (Number.isNaN(scheduled.getTime())) return "upcoming";
+  const difference = scheduled.getTime() - Date.now();
+  if (difference < -30 * 60 * 1000) return "overdue";
+  if (difference <= 30 * 60 * 1000) return "due-now";
+  return "upcoming";
+}
+
 export default function PatientProfilePage() {
   const { patient_id } = useParams<{ patient_id: string }>();
   const router = useRouter();
@@ -62,6 +100,10 @@ export default function PatientProfilePage() {
   const [uploading, setUploading] = useState(false);
   const [dischargeSummary, setDischargeSummary] = useState("");
   const [followUp, setFollowUp] = useState("");
+  const [administrationTarget, setAdministrationTarget] = useState<DraftMedication | null>(null);
+  const [administrationStatus, setAdministrationStatus] = useState<"given" | "held" | "refused">("given");
+  const [administrationReason, setAdministrationReason] = useState("");
+  const [administering, setAdministering] = useState(false);
 
   async function load() {
     const [profileResponse, boardResponse] = await Promise.all([
@@ -176,17 +218,59 @@ export default function PatientProfilePage() {
   function updateMedication(id: number, changes: Partial<DraftMedication>) {
     setMedications((current) => current.map((med) => med.id === id ? { ...med, ...changes } : med));
   }
-  function confirmMedication(id: number) { updateMedication(id, { isNew: false }); }
+  function confirmMedication(id: number) {
+    const medication = medications.find((item) => item.id === id);
+    if (!medication?.medication_name.trim()) {
+      setStatus("Medication name is required.");
+      return;
+    }
+    updateMedication(id, { isNew: false });
+    setStatus("Medication ready to save. Click Save All Changes to apply it.");
+  }
+  function removeMedication(id: number) {
+    setMedications((current) => current.filter((med) => med.id !== id));
+    setStatus("Medication removed from the draft. Click Save All Changes to apply it.");
+  }
+  async function confirmHistoryMedication(id: number) {
+    const medication = medications.find((item) => item.id === id);
+    if (!medication?.medication_name.trim()) {
+      setStatus("Medication name is required.");
+      return;
+    }
+    try {
+      setStatus("Recording medication history...");
+      const order = await scheduleMedication(patient_id, medication);
+      await administerMedication(patient_id, order.id, "given");
+      await load();
+      setStatus("Medication administration recorded.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to record medication history.");
+    }
+  }
   function addHistoryMedication() {
     setMedications((current) => [...current, {
       id: -Date.now(), medication_name: "", dosage: "", scheduled_time: "",
       status: "given", given_at: new Date().toISOString(), notes: "", isNew: true,
     }]);
   }
-  function markGiven(id: number) {
-    setMedications((current) => current.map((med) => med.id === id
-      ? { ...med, status: "given", given_at: med.given_at || new Date().toISOString() }
-      : med));
+  async function confirmAdministration() {
+    if (!administrationTarget) return;
+    if (administrationStatus !== "given" && !administrationReason.trim()) {
+      setStatus("A reason is required for a held or refused dose.");
+      return;
+    }
+    try {
+      setAdministering(true);
+      await administerMedication(patient_id, administrationTarget.id, administrationStatus, administrationReason);
+      setAdministrationTarget(null);
+      setAdministrationReason("");
+      await load();
+      setStatus("Medication administration recorded.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to record administration.");
+    } finally {
+      setAdministering(false);
+    }
   }
   async function discharge() {
     if (!profile) return;
@@ -194,9 +278,9 @@ export default function PatientProfilePage() {
       alert("Discharge Summary is required.");
       return;
     }
-    const saved = await fetch(`${API_ORIGIN}/api/patients/${patient_id}/profile`, {
-      method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...profile, lab_results: labs, labs, medications,
+      const saved = await fetch(`${API_ORIGIN}/api/patients/${patient_id}/profile`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...profile, lab_results: labs, labs,
         vitals: profile.vitals, ari: profile.ari, esi: profile.esi,
         pathway: profile.pathway, bed_id: profile.ward?.bed || null,
         clinician_id: profile.ward?.clinician || null }),
@@ -442,19 +526,26 @@ export default function PatientProfilePage() {
             </button>
           </div>
           <table className="profile-table medication-table">
-            <thead><tr><th>Name</th><th>Frequency/Time</th><th>Instructions</th><th>Action</th></tr></thead>
-            <tbody>{medications.filter((med) => med.status === "scheduled").map((med) => (
+            <thead><tr><th>Name</th><th>Dose</th><th>Route</th><th>Date &amp; time</th><th>Instructions</th><th>Action</th></tr></thead>
+            <tbody>{medications.filter((med) => med.status === "scheduled").sort((a, b) => {
+              const order = { overdue: 0, "due-now": 1, upcoming: 2 };
+              return order[medicationDueState(a.scheduled_time)] - order[medicationDueState(b.scheduled_time)];
+            }).map((med) => (
               <tr key={med.id}>
                 {med.isNew ? <>
                   <td><input value={med.medication_name} onChange={(e) => updateMedication(med.id, { medication_name: e.target.value })} placeholder="Name" /></td>
-                  <td><input value={med.scheduled_time} onChange={(e) => updateMedication(med.id, { scheduled_time: e.target.value })} placeholder="Frequency / time" /></td>
+                  <td><input value={med.dosage} onChange={(e) => updateMedication(med.id, { dosage: e.target.value })} placeholder="Dose" /></td>
+                  <td><input value={med.route || ""} onChange={(e) => updateMedication(med.id, { route: e.target.value })} placeholder="Route" /></td>
+                  <td><input type="datetime-local" value={toScheduledDateTimeLocal(med.scheduled_time)} onChange={(e) => updateMedication(med.id, { scheduled_time: e.target.value ? new Date(e.target.value).toISOString() : "" })} /></td>
                   <td><input value={med.notes || ""} onChange={(e) => updateMedication(med.id, { notes: e.target.value })} placeholder="Instructions" /></td>
-                  <td><button type="button" onClick={() => confirmMedication(med.id)}>Confirm</button></td>
+                  <td><button type="button" className="med-confirm-button" onClick={() => confirmMedication(med.id)}>Confirm</button></td>
                 </> : <>
-                  <td>{med.medication_name || "Unnamed medication"}</td>
-                  <td>{med.scheduled_time || "Time not specified"}</td>
+                  <td><input value={med.medication_name} onChange={(e) => updateMedication(med.id, { medication_name: e.target.value })} /></td>
+                  <td><input value={med.dosage} onChange={(e) => updateMedication(med.id, { dosage: e.target.value })} placeholder="Dose" /></td>
+                  <td><input value={med.route || ""} onChange={(e) => updateMedication(med.id, { route: e.target.value })} placeholder="Route" /></td>
+                  <td><input type="datetime-local" value={toScheduledDateTimeLocal(med.scheduled_time)} onChange={(e) => updateMedication(med.id, { scheduled_time: e.target.value ? new Date(e.target.value).toISOString() : "" })} /></td>
                   <td>{med.notes || "No instructions"}</td>
-                  <td><button type="button" onClick={() => markGiven(med.id)}>Mark Given</button></td>
+                  <td>{med.id < 0 ? <button type="button" className="med-remove-button" onClick={() => removeMedication(med.id)}>Remove</button> : <button type="button" className="med-given-button" onClick={() => { setAdministrationTarget(med); setAdministrationStatus("given"); }}>Mark Given</button>}</td>
                 </>}
               </tr>
             ))}</tbody>
@@ -469,20 +560,37 @@ export default function PatientProfilePage() {
           </div>
           <table className="profile-table medication-table">
             <thead><tr><th>Name</th><th>Given At</th><th>Instructions</th></tr></thead>
-            <tbody>{medications.filter((med) => med.status === "given").map((med) => (
+            <tbody>{medications.filter((med) => med.status !== "scheduled").map((med) => (
               <tr key={med.id}>
                 {med.isNew ? <>
                   <td><input value={med.medication_name} onChange={(e) => updateMedication(med.id, { medication_name: e.target.value })} placeholder="Name" /></td>
-                  <td><input value={med.given_at || ""} onChange={(e) => updateMedication(med.id, { given_at: e.target.value })} placeholder="Date / time" /></td>
-                  <td><input value={med.notes || ""} onChange={(e) => updateMedication(med.id, { notes: e.target.value })} placeholder="Instructions" /><button type="button" onClick={() => confirmMedication(med.id)}>Confirm</button></td>
+                  <td><input type="datetime-local" value={toDateTimeLocal(med.given_at)} onChange={(e) => updateMedication(med.id, { given_at: e.target.value ? new Date(e.target.value).toISOString() : "" })} /></td>
+                  <td><input value={med.notes || ""} onChange={(e) => updateMedication(med.id, { notes: e.target.value })} placeholder="Instructions" /><button type="button" onClick={() => confirmHistoryMedication(med.id)}>Confirm</button></td>
                 </> : <>
-                  <td>{med.medication_name || "Unnamed medication"}</td><td>{med.given_at || "Date not recorded"}</td><td>{med.notes || "No instructions"}</td>
+                  <td>{med.medication_name || "Unnamed medication"}</td><td><strong>{med.status.replace("_", " ")}</strong> · {formatDateTime(med.given_at)}</td><td>{med.notes || med.administration_reason || "No instructions"}</td>
                 </>}
               </tr>
             ))}</tbody>
           </table>
         </div>
       </section>
+      {administrationTarget && (
+        <div className="modal-backdrop" role="presentation" onClick={() => setAdministrationTarget(null)}>
+          <section className="verification-modal" role="dialog" aria-modal="true" aria-labelledby="verify-medication-title" onClick={(event) => event.stopPropagation()}>
+            <h2 id="verify-medication-title">Verify medication administration</h2>
+            <p>Confirm the patient identifier, medication, dose, and route before recording this event.</p>
+            <dl className="verification-list">
+              <div><dt>Patient</dt><dd>{profile.display_id} · {profile.name || "Name not recorded"}</dd></div>
+              <div><dt>Medication</dt><dd>{administrationTarget.medication_name || "Unnamed medication"}</dd></div>
+              <div><dt>Dose</dt><dd>{administrationTarget.dosage || "Dose not specified"}</dd></div>
+              <div><dt>Route</dt><dd>{administrationTarget.route || "Route not specified"}</dd></div>
+            </dl>
+            <label>Status<select value={administrationStatus} onChange={(event) => setAdministrationStatus(event.target.value as typeof administrationStatus)}><option value="given">Given</option><option value="held">Held</option><option value="refused">Refused</option></select></label>
+            {administrationStatus !== "given" && <label>Reason<textarea value={administrationReason} onChange={(event) => setAdministrationReason(event.target.value)} placeholder="Required justification" /></label>}
+            <div className="modal-actions"><button type="button" onClick={() => setAdministrationTarget(null)}>Cancel</button><button type="button" disabled={administering} onClick={confirmAdministration}>{administering ? "Recording..." : "Confirm and record"}</button></div>
+          </section>
+        </div>
+      )}
       <section className="profile-card discharge-card">
         <h2>Discharge</h2>
         <div className="profile-fields">
