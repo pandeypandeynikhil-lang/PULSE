@@ -9,10 +9,12 @@ export default function PatientDrawer({
   patient,
   onClose,
   onAction,
+  simMinutes,
 }: {
   patient: Patient | null;
   onClose: () => void;
   onAction: () => void;
+  simMinutes?: number;
 }) {
   const router = useRouter();
   if (!patient) return null;
@@ -21,6 +23,22 @@ export default function PatientDrawer({
     await post(`/api/decide/${activePatient.id}/accept`);
     onAction();
   }
+  
+  // Calculate vital deltas (current - triage)
+  const calculateDelta = (key: string, current: number | null | undefined): { value: number; direction: string; display: string } | null => {
+    if (current == null) return null;
+    const triage = patient.triage_vitals?.[key];
+    if (triage == null) return null;
+    const delta = current - triage;
+    const direction = delta > 0 ? "↑" : delta < 0 ? "↓" : "→";
+    const color = delta > 0 ? "text-red-500" : delta < 0 ? "text-blue-500" : "text-gray-400";
+    return {
+      value: delta,
+      direction,
+      display: `${direction} ${Math.abs(delta)}`
+    };
+  };
+  
   const vitals = patient.vitals || {};
   const systolic = vitals.systolic_bp;
   const diastolic = vitals.diastolic_bp;
@@ -54,6 +72,11 @@ export default function PatientDrawer({
             <div className="recommendation-banner">
               <div className="recommendation-label">PULSE Recommendation</div>
               <div className="recommendation-main"><strong>ESI {patient.esi}</strong><span>{patient.confidence} confidence</span></div>
+              {patient.escalation_reason && (
+                <div className="recommendation-reason" style={{ fontSize: "0.85em", color: "#666", marginTop: "4px" }}>
+                  {patient.escalation_reason}
+                </div>
+              )}
               <div className="recommendation-route">{patient.routing.pathway} · {patient.routing.suggested_bed ? `bed ${patient.routing.suggested_bed}` : "bed unassigned"}</div>
             </div>
           </div>
@@ -102,8 +125,32 @@ export default function PatientDrawer({
           <div className="sec">
             <h4>Vitals · {patient.vitals_present} of 6 recorded</h4>
             <div className="vgrid">
-              {systolic != null && diastolic != null && <div className="vc"><div className="k">Blood Pressure</div><div className="v">{systolic}/{diastolic} <small>mmHg</small></div></div>}
-              {vitalCards.map(([label, key, unit]) => vitals[key] != null && <div className="vc" key={key}><div className="k">{label}</div><div className="v">{vitals[key]} <small>{unit}</small></div></div>)}
+              {systolic != null && diastolic != null && (
+                <div className="vc">
+                  <div className="k">Blood Pressure</div>
+                  <div className="v" style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                    <span>{systolic}/{diastolic} <small>mmHg</small></span>
+                    {calculateDelta("systolic_bp", systolic) && (
+                      <span style={{ color: calculateDelta("systolic_bp", systolic)?.value! > 0 ? "#ef5350" : "#42a5f5", fontSize: "0.9em" }}>
+                        {calculateDelta("systolic_bp", systolic)?.display}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+              {vitalCards.map(([label, key, unit]) => vitals[key] != null && (
+                <div className="vc" key={key}>
+                  <div className="k">{label}</div>
+                  <div className="v" style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                    <span>{vitals[key]} <small>{unit}</small></span>
+                    {calculateDelta(key, vitals[key]) && (
+                      <span style={{ color: calculateDelta(key, vitals[key])?.value! > 0 ? "#ef5350" : "#42a5f5", fontSize: "0.9em" }}>
+                        {calculateDelta(key, vitals[key])?.display}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
           <div className="sec care-section">

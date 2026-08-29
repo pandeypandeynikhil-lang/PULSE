@@ -29,6 +29,8 @@ export interface Patient {
   sirs?: string[] | null;
   synergy_matched?: string[] | null;
   vitals: Vital; vitals_present: number; drivers: Driver[]; spans: Span[]; nlp_source?: string;
+  triage_vitals?: Vital;
+  escalation_reason?: string | null;
 }
 
 export interface Medication {
@@ -61,6 +63,7 @@ export interface Clinician {
 
 export interface BoardState {
   rows: Patient[];
+  sim_minutes: number;
   capacity: { beds: Record<string, number>; specialists: Record<string, number>; staff_on: number };
   beds: Bed[];
   clinicians: Clinician[];

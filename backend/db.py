@@ -147,6 +147,21 @@ def score_history(conn, patient_id: str, limit: int = 12) -> list[dict]:
     return [dict(r) for r in rows][-limit:]
 
 
+def first_score(conn, patient_id: str) -> dict[str, Any] | None:
+    """Get the initial/triage score (first score recorded for a patient)."""
+    row = conn.execute(
+        "SELECT at, ari, esi, confidence, payload FROM scores WHERE patient_id=? ORDER BY at ASC LIMIT 1",
+        (patient_id,)).fetchone()
+    if not row:
+        return None
+    data = dict(row)
+    try:
+        data["payload"] = json.loads(data.get("payload") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        data["payload"] = {}
+    return data
+
+
 def add_medication(conn, data: dict[str, Any]) -> int:
     cur = conn.execute(
         """INSERT INTO medications

@@ -387,6 +387,10 @@ class Engine:
                 continue
             if res is None:
                 continue
+            # Get initial/triage vitals for delta calculation
+            triage_score = db.first_score(self.conn, p.id)
+            triage_vitals = triage_score.get("payload", {}).get("vitals") if triage_score else None
+            
             rows.append({
                 "id": p.id, "display_id": p.display_id, "age": p.age,
                 "name": getattr(p, "name", None), "sex": getattr(p, "sex", None),
@@ -411,10 +415,12 @@ class Engine:
                 "specialty": p.specialty or res["routing"]["specialty"],
                 "routing": res["routing"],
                 "vitals": res["vitals"],
+                "triage_vitals": triage_vitals or {},
                 "drivers": res["vitals_out"]["drivers"] if res["vitals_out"] else [],
                 "vitals_present": res["vitals_out"]["vitals_present"] if res["vitals_out"] else 0,
                 "spans": res["symptom"]["spans"],
                 "nlp_source": res["symptom"].get("nlp_source", "lexicon"),
+                "escalation_reason": res["trend"].get("reason"),
             })
 
         order = {"I": 0, "II": 1, "III": 2, "IV": 3, "V": 4, None: 5}

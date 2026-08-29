@@ -56,9 +56,11 @@ function actionFor(patient: Patient, onOpen: (id: string) => void) {
 export default function LiveBoard({
   patients,
   onOpen,
+  simMinutes,
 }: {
   patients: Patient[];
   onOpen: (id: string) => void;
+  simMinutes?: number;
 }) {
   return (
     <section className="panel board">
