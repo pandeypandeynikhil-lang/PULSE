@@ -47,12 +47,17 @@ npm run dev
 Then open **http://localhost:3000**. First run trains the Layer 1 model
 (~20 seconds); after that it starts immediately.
 
-Three pages, one live board underneath all of them: **Patient Intake** (`/intake`)
-enters demographics, vitals, dictated clinical notes, and sequentially uploaded PDF
-lab reports, and submitting puts a real patient on the board. **Triage Dashboard**
-(`/dashboard`) is the live operational board, department state, shadow-mode
-agreement, and audit log. **Ward Map** (`/ward`) is the colour-coded bed and
-clinician roster Layer 5 actually routes against, editable in real time.
+Six routes, one live board underneath all of them: **`/`** is the landing page —
+what the product argues, before you touch it. **Triage Dashboard** (`/dashboard`)
+is the live operational board, department state, shadow-mode agreement, and audit
+log. **Patient Intake** (`/intake`) enters demographics, vitals, dictated clinical
+notes, and sequentially uploaded PDF lab reports, and submitting puts a real
+patient on the board. **Ward Map** (`/ward`) is the colour-coded bed and clinician
+roster Layer 5 actually routes against, editable in real time. **Patient Directory**
+(`/patients`) searches every patient on record; each one opens onto a full chart
+(`/patients/[id]`) — medications, clinical notes, and discharge, detailed below.
+**Ambulance Tracking** (`/ambulances`) is a live radar of the inbound fleet, road
+routes and all.
 
 Runs fully offline by default. To turn on the LLM NLP tier (and the Voice Intake
 panel, which needs it): `cp .env.example .env`, fill in `GEMINI_API_KEY` and/or
@@ -256,7 +261,8 @@ a real deployment would run it on a schedule rather than on demand.
 **Real:** the XGBoost model and its SHAP attributions · the full six-layer scoring
 pipeline · the scheduler loop · SQLite persistence with append-only scores · the audit
 trail · the override flow · shadow-mode agreement tracking · WebSocket push with
-polling fallback.
+polling fallback · live ambulance tracking on real, cached OSRM road routes · the
+medication, clinical-notes and discharge workflow on a patient's chart.
 
 **Stubbed, deliberately:** the scripted scenario's patient arrivals and vitals come
 from `simulation.py` rather than live monitors, and the bed/clinician roster (below)
@@ -317,6 +323,40 @@ temperature, respiratory rate — and used to pre-fill the vitals fields, so a r
 that happens to carry a physical-exam block doesn't need those numbers retyped by
 hand.
 
+**Live ambulance tracking is real road routing, not a straight line on a map.**
+`backend/ambulance.py` fetches each inbound vehicle's route from OSRM
+(project-osrm.org) — a real Bengaluru road-network polyline — exactly once, at
+`python -m backend.ambulance` time, and caches it to `data/ambulance_routes.json`,
+committed with the project. `Engine.reset()` only ever reads that cached file; it
+never calls OSRM live, so a demo's Reset button can never depend on the venue's
+wifi or a third-party service being up, and a route that was never fetched falls
+back to a straight line rather than breaking. Every tick, `position_at()`
+interpolates each ambulance's live bearing and distance from the hospital along
+its real route — the same "author the ground truth once, let the engine compute
+the live state" pattern `simulation.py` uses for physiology, applied to geography.
+The Ambulance Tracking page (`frontend/app/ambulances`, `components/AmbulanceRadar`)
+renders it as a radar: click a marker for that vehicle's crew, unit number, and
+live ETA. This is also Layer 0's actual pre-arrival signal source in the running
+app — an inbound ambulance's distance and ETA feed the board before the patient
+is ever at the door.
+
+**A patient's chart doesn't end at triage.** `/patients` searches every patient on
+record; opening one (`/patients/[id]`) reaches a full medication and notes
+workflow that exists independently of the scoring pipeline. Medications can be
+scheduled ahead (`POST /api/medications/schedule`) or given immediately in an
+emergency (`POST /api/medications/emergency`, which schedules and records the
+administration in one call); every administration is a `given` / `held` /
+`refused` / `not_available` / `cancelled` record, and the API rejects a `held` or
+`refused` entry with no reason — the record can't silently go quiet on why a dose
+wasn't given. Each administration carries an actor (`X-Actor-Id` header, default
+`demo-nurse`) — a real per-action identity already threading through the
+medication trail, ahead of where the rest of the audit rail (`db.py`'s decisions
+table) currently only records a fixed `"triage nurse"`. Clinical notes
+(`POST /api/patients/{id}/notes`, typed `surgical` / `follow_up`) and discharge
+(`POST /api/discharge/{id}`) round it out: discharging writes the discharge
+summary and any follow-up instructions as clinical notes, moves the patient to
+`discharged`, and releases their bed and clinician back to the Ward Map roster.
+
 ---
 
 ## API
@@ -337,6 +377,15 @@ automatically; a `curl`/Postman call needs it added by hand.
 | `POST /api/intake` | Structured intake form — creates a live, queued patient from reviewed details/vitals/labs |
 | `POST /api/extract-lab` | PDF lab report upload — structured demographics, `test_results`, and inferred `vitals`; requires Docling and Ollama |
 | `POST /api/ari` | Stateless ARI preview from an unreviewed snapshot — no patient created |
+| `PATCH /api/patients/{id}/profile` | Edits a patient's chart — demographics, vitals, labs, bed/clinician assignment |
+| `POST /api/patients/{id}/medications` | Adds a medication order to a patient's chart |
+| `PATCH /api/patients/{id}/medications/{med_id}/order` | Edits a medication order (dosage, frequency, route, ...) |
+| `POST /api/medications/schedule` | Schedules a medication ahead of time |
+| `POST /api/medications/emergency` | Orders and immediately records an emergency (given-now) medication |
+| `PATCH /api/patients/{id}/medications/{med_id}` | Records an administration — given / held / refused / not_available / cancelled |
+| `PATCH /api/patients/{id}/medications/{med_id}/given` | Shortcut to mark a dose given |
+| `POST /api/patients/{id}/notes` | Adds a clinical note (`surgical` / `follow_up`) |
+| `POST /api/discharge/{id}` | Discharges a patient — logs the summary, releases their bed and clinician |
 | `POST /api/ward/beds/{id}/status` | Staff sets a bed to available / cleaning / unavailable |
 | `POST /api/ward/clinicians/{id}/status` | Staff sets a clinician to available / off_shift |
 | `POST /api/control/reset` | Reset the simulation |
@@ -354,20 +403,24 @@ automatically; a `curl`/Postman call needs it added by hand.
 backend/
   main.py            FastAPI app, scheduler loop, WebSocket, surge/profile/purge control
   auth.py            Access control — X-PULSE-Token bearer gate on every write
-  db.py              SQLite — append-only scores, audit trail, data-retention purge
+  db.py              SQLite — append-only scores, audit trail, meds/notes, data-retention purge
   simulation.py      Simulated department and patient physiology (16 scripted patients)
+  ambulance.py       Live fleet tracking on cached, real OSRM road routes
   ward.py            Bed/clinician roster, loaded from a named hospital-scale profile —
                       the one source of truth Layer 5 routes against and the Ward Map renders
   layers/            The scoring pipeline, one file per layer (1, 1b, 2, 2b, 3, 4, 5)
   lab/               PDF lab report extraction — Docling + local Ollama
   ml/train.py        Model training
 frontend/            Next.js + TypeScript nurse console
-  app/               App Router entry point — dashboard, intake, ward routes
-  components/        Navigation, dashboard, board, intake, ward map, drawer
+  app/               App Router entry point — landing, dashboard, intake, ward,
+                      patients (directory + chart), ambulances routes
+  components/        Navigation, dashboard, board, intake, ward map, ambulance
+                      radar, patient chart, drawer
   lib/               Typed API client (sends the auth header) and shared domain models
 data/
   clinical_lexicon.json     Red-flag rubric for Layer 2
   hospital_profiles.json    Named capacity presets ward.py loads at runtime
+  ambulance_routes.json     Cached real OSRM road routes for the live fleet
 docs/ARCHITECTURE.md
 ```
 
