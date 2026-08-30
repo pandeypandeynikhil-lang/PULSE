@@ -1,0 +1,62 @@
+{
+  "_comment": "Named capacity presets ward.py loads from — the 'a workflow that works for a large urban trauma centre may not transfer to a small rural ED' requirement made concrete. Same pathway/specialty vocabulary as layer5_routing.py's PATHWAYS map in every preset (routing logic doesn't change per hospital, only how much of each resource exists); an ED that genuinely lacks a service (e.g. no on-site vascular surgery) is represented as an empty roster, not omitted, so Layer 5 still reasons about it correctly as 'page required' rather than crashing on a missing key.",
+
+  "community_hospital": {
+    "description": "The default scenario — a mid-sized general ED, single site.",
+    "beds": {
+      "Resus / cardiac": 1, "Resus / stroke": 1, "Resus / vascular": 1,
+      "Resus / airway": 1, "Trauma bay": 1, "Acute majors": 3, "Fast track": 4
+    },
+    "specialists": {
+      "Cardiology": ["Dr. Adeyemi"],
+      "Neurology": ["Dr. Whitfield"],
+      "Respiratory": ["Dr. Okoye"],
+      "Acute medicine": ["Dr. Larsen", "Dr. Mbeki"],
+      "General surgery": ["Dr. Petrova"],
+      "Vascular surgery": [],
+      "Trauma surgery": ["Dr. Hassan"],
+      "Emergency medicine": ["Dr. Reyes", "Dr. Lindqvist"],
+      "Emergency nurse practitioner": ["ENP Cole", "ENP Dubois"]
+    },
+    "staff_on": 6
+  },
+
+  "rural_ed": {
+    "description": "A small rural department — a handful of beds, one or two clinicians covering multiple specialties, no on-site surgical subspecialty.",
+    "beds": {
+      "Resus / cardiac": 1, "Trauma bay": 1, "Acute majors": 2, "Fast track": 2
+    },
+    "specialists": {
+      "Cardiology": [],
+      "Neurology": [],
+      "Respiratory": [],
+      "Acute medicine": ["Dr. Okafor"],
+      "General surgery": [],
+      "Vascular surgery": [],
+      "Trauma surgery": [],
+      "Emergency medicine": ["Dr. Okafor"],
+      "Emergency nurse practitioner": ["ENP Basu"]
+    },
+    "staff_on": 3
+  },
+
+  "urban_trauma_center": {
+    "description": "A large Level I urban trauma centre — multiple resus bays per specialty, a deeper on-call roster, higher baseline staffing.",
+    "beds": {
+      "Resus / cardiac": 2, "Resus / stroke": 2, "Resus / vascular": 1,
+      "Resus / airway": 2, "Trauma bay": 3, "Acute majors": 8, "Fast track": 10
+    },
+    "specialists": {
+      "Cardiology": ["Dr. Adeyemi", "Dr. Kowalski"],
+      "Neurology": ["Dr. Whitfield", "Dr. Nakamura"],
+      "Respiratory": ["Dr. Okoye", "Dr. Singh"],
+      "Acute medicine": ["Dr. Larsen", "Dr. Mbeki", "Dr. Haddad"],
+      "General surgery": ["Dr. Petrova", "Dr. Almeida"],
+      "Vascular surgery": ["Dr. Chen"],
+      "Trauma surgery": ["Dr. Hassan", "Dr. Osei"],
+      "Emergency medicine": ["Dr. Reyes", "Dr. Lindqvist", "Dr. Park", "Dr. Ibrahim"],
+      "Emergency nurse practitioner": ["ENP Cole", "ENP Dubois", "ENP Farah", "ENP Grewal"]
+    },
+    "staff_on": 18
+  }
+}

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { API_ORIGIN, administerMedication, scheduleMedication } from "@/lib/api";
+import { API_ORIGIN, administerMedication, authHeaders, scheduleMedication } from "@/lib/api";
 import type { ClinicalNote, Medication, TestResult } from "@/lib/types";
 
 type Profile = {
@@ -175,7 +175,7 @@ export default function PatientProfilePage() {
       `${API_ORIGIN}/api/patients/${patient_id}/profile`,
       {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(true),
         body: JSON.stringify({
           ...profile,
           lab_results: labs,
@@ -200,6 +200,7 @@ export default function PatientProfilePage() {
     form.append("file", file);
     const response = await fetch(`${API_ORIGIN}/api/extract-lab`, {
       method: "POST",
+      headers: authHeaders(false),
       body: form,
     });
     if (response.ok) {
@@ -279,7 +280,7 @@ export default function PatientProfilePage() {
       return;
     }
       const saved = await fetch(`${API_ORIGIN}/api/patients/${patient_id}/profile`, {
-        method: "PATCH", headers: { "Content-Type": "application/json" },
+        method: "PATCH", headers: authHeaders(true),
         body: JSON.stringify({ ...profile, lab_results: labs, labs,
         vitals: profile.vitals, ari: profile.ari, esi: profile.esi,
         pathway: profile.pathway, bed_id: profile.ward?.bed || null,
@@ -288,7 +289,7 @@ export default function PatientProfilePage() {
     if (!saved.ok) { setStatus("Unable to save changes before discharge."); return; }
     const response = await fetch(`${API_ORIGIN}/api/discharge/${patient_id}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders(true),
       body: JSON.stringify({
         discharge_summary: dischargeSummary,
         follow_up_instructions: followUp,

@@ -14,6 +14,118 @@ import {
   PulseMark,
 } from "./Icons";
 
+// Three bespoke illustrations for the showcase strip below the hero — the
+// same "hand-authored SVG, no stock imagery" convention Icons.tsx already
+// holds to, just scaled up into art rather than a 24×24 glyph. Each reads as
+// the thing it represents (a trajectory crossing a tier line, a spoken
+// phrase resolving into English, three signals converging on one score)
+// rather than generic medical decoration, so the panel is doing real work,
+// not just filling space the way a stock photo would.
+function ArtDeterioration() {
+  return (
+    <svg viewBox="0 0 400 240" fill="none" aria-hidden>
+      <defs>
+        <radialGradient id="sc-g1" cx="78%" cy="24%" r="65%">
+          <stop offset="0%" stopColor="rgba(255,147,166,0.32)" />
+          <stop offset="100%" stopColor="rgba(255,147,166,0)" />
+        </radialGradient>
+        <linearGradient id="sc-line1" x1="0" y1="1" x2="1" y2="0">
+          <stop offset="0%" stopColor="#8fb8ff" />
+          <stop offset="100%" stopColor="#ff93a6" />
+        </linearGradient>
+      </defs>
+      <rect width="400" height="240" fill="url(#sc-g1)" />
+      <line x1="20" y1="150" x2="380" y2="150" stroke="#2b2240" strokeWidth="1.5" strokeDasharray="5 6" />
+      <line x1="20" y1="92" x2="380" y2="92" stroke="#2b2240" strokeWidth="1.5" strokeDasharray="5 6" />
+      <text x="30" y="145" fontFamily="var(--mono)" fontSize="10" fill="#8779a3">ESI IV</text>
+      <text x="30" y="87" fontFamily="var(--mono)" fontSize="10" fill="#8779a3">ESI II</text>
+      <path
+        d="M30 168 L84 164 L138 152 L192 130 L246 100 L300 68 L340 46"
+        stroke="url(#sc-line1)"
+        strokeWidth="3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="340" cy="46" r="6" fill="#ff93a6" />
+      <circle cx="340" cy="46" r="12" fill="none" stroke="#ff93a6" strokeWidth="1.4" opacity="0.55" />
+      <circle cx="340" cy="46" r="19" fill="none" stroke="#ff93a6" strokeWidth="1" opacity="0.3" />
+    </svg>
+  );
+}
+
+function ArtVoice() {
+  return (
+    <svg viewBox="0 0 400 240" fill="none" aria-hidden>
+      <defs>
+        <radialGradient id="sc-g2" cx="50%" cy="42%" r="60%">
+          <stop offset="0%" stopColor="rgba(143,227,184,0.3)" />
+          <stop offset="100%" stopColor="rgba(143,227,184,0)" />
+        </radialGradient>
+      </defs>
+      <rect width="400" height="240" fill="url(#sc-g2)" />
+      {[26, 42, 58].map((r) => (
+        <circle key={r} cx="200" cy="110" r={r} stroke="#4fbe8c" strokeWidth="1.3" opacity={0.5 - r / 140} />
+      ))}
+      <rect x="188" y="78" width="24" height="44" rx="12" fill="none" stroke="#8fe3b8" strokeWidth="2" />
+      <path d="M172 108a28 28 0 0 0 56 0" stroke="#8fe3b8" strokeWidth="2" strokeLinecap="round" fill="none" />
+      <path d="M200 136v14M188 150h24" stroke="#8fe3b8" strokeWidth="2" strokeLinecap="round" />
+      <rect x="46" y="168" width="88" height="30" rx="8" fill="#171123" stroke="#2b2240" />
+      <text x="90" y="187" textAnchor="middle" fontFamily="var(--mono)" fontSize="11" fill="#b6a8d3">कोई भाषा</text>
+      <path d="M140 183h56" stroke="#4fbe8c" strokeWidth="1.6" strokeLinecap="round" strokeDasharray="1 7" />
+      <path d="M188 176l10 7-10 7" stroke="#4fbe8c" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+      <rect x="266" y="168" width="88" height="30" rx="8" fill="#171123" stroke="#4fbe8c" />
+      <text x="310" y="187" textAnchor="middle" fontFamily="var(--mono)" fontSize="11" fill="#8fe3b8">chest pain</text>
+    </svg>
+  );
+}
+
+function ArtFusion() {
+  const nodes = [
+    { x: 44, y: 46, c: "#8fb8ff", label: "vitals" },
+    { x: 44, y: 120, c: "#ffce85", label: "symptoms" },
+    { x: 44, y: 194, c: "#b9a6ff", label: "labs" },
+  ];
+  return (
+    <svg viewBox="0 0 400 240" fill="none" aria-hidden>
+      <defs>
+        <radialGradient id="sc-g3" cx="82%" cy="50%" r="55%">
+          <stop offset="0%" stopColor="rgba(185,166,255,0.3)" />
+          <stop offset="100%" stopColor="rgba(185,166,255,0)" />
+        </radialGradient>
+      </defs>
+      <rect width="400" height="240" fill="url(#sc-g3)" />
+      {nodes.map((n) => (
+        <g key={n.label}>
+          <path d={`M${n.x + 8} ${n.y} C 170 ${n.y}, 230 120, 300 120`} stroke={n.c} strokeWidth="1.6" opacity="0.55" fill="none" />
+          <circle cx={n.x} cy={n.y} r="7" fill={n.c} />
+          <text x={n.x} y={n.y + 24} textAnchor="middle" fontFamily="var(--mono)" fontSize="10" fill="#8779a3">{n.label}</text>
+        </g>
+      ))}
+      <circle cx="300" cy="120" r="17" fill="none" stroke="#b9a6ff" strokeWidth="1.4" opacity="0.5" />
+      <circle cx="300" cy="120" r="10" fill="#b9a6ff" />
+      <text x="300" y="164" textAnchor="middle" fontFamily="var(--mono)" fontWeight={700} fontSize="12" fill="#f2eefa">ARI</text>
+    </svg>
+  );
+}
+
+const SHOWCASE = [
+  {
+    art: ArtDeterioration,
+    title: "Deterioration Engine",
+    body: "PT 11 arrived low-acuity — nothing in the words or the first vitals said otherwise. PULSE re-scores every waiting patient on a loop and caught the trajectory crossing a tier boundary anyway, without anyone asking it to.",
+  },
+  {
+    art: ArtVoice,
+    title: "Voice Intake, Any Language",
+    body: "A patient or companion who doesn't share the nurse's language speaks. PULSE translates, extracts the red flags, and a scored patient joins the same queue as everyone else — seconds later.",
+  },
+  {
+    art: ArtFusion,
+    title: "Six Signals, One Explainable Score",
+    body: "Vitals, symptom narrative, SIRS criteria and lab findings fuse into one Arrival Risk Index — a transparent, SHAP-explained formula a nurse can be talked through, never a black box.",
+  },
+];
+
 const FEATURES = [
   {
     Icon: IconMic,
@@ -101,6 +213,22 @@ export default function Landing() {
             Start a patient intake
           </Link>
         </div>
+      </section>
+
+      <p className="landing-eyebrow-line landing-eyebrow-line--first">
+        Helping a nurse see risk before a chart does
+      </p>
+
+      <section className="landing-showcase">
+        {SHOWCASE.map(({ art: Art, title, body }) => (
+          <div className="showcase-card" key={title}>
+            <div className="showcase-art">
+              <Art />
+            </div>
+            <h3>{title}</h3>
+            <p>{body}</p>
+          </div>
+        ))}
       </section>
 
       <p className="landing-eyebrow-line">

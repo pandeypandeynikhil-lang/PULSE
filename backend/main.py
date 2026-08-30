@@ -28,12 +28,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 try:
-    from . import ambulance, db, simulation, ward
+    from . import ambulance, auth, db, simulation, ward
     from .layers import (layer1_vitals, layer1b_heuristics, layer2_symptom_nlp, layer2b_labs,
                          layer3_fusion, layer4_deterioration, layer5_routing)
 except ImportError:
     # Supports `uvicorn main:app` when the working directory is backend/.
     import ambulance  # type: ignore[no-redef]
+    import auth  # type: ignore[no-redef]
     import db  # type: ignore[no-redef]
     import simulation  # type: ignore[no-redef]
     import ward  # type: ignore[no-redef]
@@ -41,6 +42,24 @@ except ImportError:
                         layer3_fusion, layer4_deterioration, layer5_routing)
 
 TICK_SECONDS = 1.0          # wall-clock cadence of the scheduler
+
+# A small pool of realistic presenting complaints + vitals, reused to build
+# a surge burst — the "show how the system behaves under 3x normal volume"
+# requirement made concrete rather than asserted. Deliberately a mix of
+# acuities (a lac and an allergic reaction alongside chest tightness and a
+# confused febrile patient): a real surge is not N copies of the same
+# emergency, and Layer 5's routing/bed contention only means something if
+# the burst is actually heterogeneous.
+_VITAL_KEYS = ("heart_rate", "systolic_bp", "diastolic_bp", "resp_rate", "spo2", "temperature")
+_SURGE_TEMPLATES = [
+    ("chest tightness, short of breath",           (108, 100, 66, 24, 93, 37.4)),
+    ("high fever, shivering, a little confused",   (116, 92, 58, 26, 91, 39.2)),
+    ("severe headache, vomiting",                  (94, 150, 96, 18, 97, 37.0)),
+    ("deep laceration to the leg, bleeding controlled", (98, 118, 76, 18, 98, 36.8)),
+    ("face swelling after eating out, itchy",      (112, 118, 74, 22, 95, 37.1)),
+    ("dizziness and palpitations since this morning", (128, 96, 60, 20, 96, 37.0)),
+]
+
 app = FastAPI(title="PULSE", version="0.1.0")
 logger = logging.getLogger(__name__)
 app.add_middleware(
@@ -49,6 +68,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _access_control(request, call_next):
+    """Gate every write under /api/* behind auth.py's bearer token — see
+    that module's docstring for the DPDP Act 2023 basis. Reads (GET/HEAD,
+    the board, history, audit) stay open; the WebSocket board push is not
+    an HTTP request and isn't covered here, which is fine since it is also
+    read-only. Applied as blanket middleware rather than a per-route
+    dependency so a future POST/PATCH/DELETE route is gated by default,
+    not by remembering to add one more decorator."""
+    if request.method not in auth.SAFE_METHODS and request.url.path.startswith("/api/"):
+        if not auth.check(request.headers.get("x-pulse-token")):
+            return JSONResponse({"detail": "Missing or invalid X-PULSE-Token header."}, status_code=401)
+    return await call_next(request)
 
 
 class Engine:
@@ -63,7 +97,22 @@ class Engine:
         self.clinicians: list[ward.Clinician] = []
         self.fleet: list[ambulance.Ambulance] = []
         self.events: list[dict[str, Any]] = []
+        # Which hospital shape PULSE is running as — a rural single-clinician
+        # ED and a large urban trauma centre are not the same triage
+        # problem, and PULSE shouldn't need a code change to become either.
+        # Set once at startup from the environment; `reset()` re-applies
+        # whatever is currently in `self.hospital_profile` rather than
+        # re-reading the environment every time, so a runtime profile
+        # switch (see set_hospital_profile) survives a Reset click.
+        self.hospital_profile = os.environ.get("PULSE_HOSPITAL_PROFILE", ward.DEFAULT_PROFILE)
         self.reset()
+
+    def set_hospital_profile(self, profile_name: str) -> bool:
+        if profile_name not in ward.available_profiles():
+            return False
+        self.hospital_profile = profile_name
+        self.reset()
+        return True
 
     # ---------------------------------------------------------------- state
     def reset(self) -> None:
@@ -74,10 +123,12 @@ class Engine:
         # See ambulance.py's module docstring for why that matters live.
         self.fleet = ambulance.build_fleet()
         self.sim_minutes = 0.0
-        self.beds, self.clinicians = ward.build_roster()
+        self.beds, self.clinicians = ward.build_roster(self.hospital_profile)
         self.events = []
         self.voice_seq = 0    # counts Voice Intake patients created this shift
         self.intake_seq = 0   # counts structured-intake patients this shift
+        self.surge_seq = 0    # counts surge-injected patients this shift
+        self.surge: dict[str, Any] = {"active": False}
         for p in self.patients:
             p.arrival_time = self.started_at + (p.arrive_min * 60.0)
             if p.arrive_min <= 0:
@@ -122,7 +173,7 @@ class Engine:
 
         history = db.score_history(self.conn, p.id)
         waited = max(0.0, (now - (p.arrival_time or now)) / 60.0)
-        trend = layer4_deterioration.assess(history, waited)
+        trend = layer4_deterioration.assess(history, waited, p.assigned_esi)
         systems = symptom["systems"]
         routing = layer5_routing.route(fused["esi"], systems, self.beds, self.clinicians)
 
@@ -182,6 +233,23 @@ class Engine:
                          f"{p.display_id}: rising trajectory — "
                          f"ESI {p.assigned_esi} → {res['fused']['esi']} "
                          f"({res['trend']['reason']})", p.display_id)
+
+            # Flat trend, but overdue for their acuity — the second,
+            # independent trigger. A recommendation here is a request to
+            # re-check the patient, not necessarily a claim their ESI
+            # should change: the nurse may accept it and find nothing has
+            # moved, which is a legitimate, logged outcome of its own.
+            elif (p.assigned_esi and not p.reassessment_flagged
+                    and res["trend"]["wait_breach"] and p.last_recommendation is None):
+                rid = db.add_recommendation(
+                    self.conn, p.id, t, "reassessment_due", res["fused"]["esi"],
+                    res["routing"]["pathway"], res["routing"]["specialty"],
+                    res["trend"]["reason"] or _rationale(res))
+                p.last_recommendation = rid
+                p.reassessment_flagged = True
+                self.log("deterioration",
+                         f"{p.display_id}: overdue for reassessment — "
+                         f"{res['trend']['reason']}", p.display_id)
 
         await self.broadcast()
 
@@ -325,6 +393,57 @@ class Engine:
                 "complaint": complaint, "age": age, "vitals": vitals,
                 "provider": provider}
 
+    # ----------------------------------------------------------------- surge
+    def trigger_surge(self, multiplier: float = 3.0, window_min: float = 3.0) -> dict[str, Any]:
+        """Injects a burst of patients over the next `window_min` minutes at
+        roughly `multiplier`x the scenario's baseline arrival rate — "show
+        how the system behaves under a simulated surge (e.g. 3x normal
+        volume)" made into something that actually happens, not a claim.
+
+        Deliberately reuses SimPatient + the exact same "inbound -> waiting"
+        state machine every scripted patient already goes through — a surge
+        patient is not a special case with its own code path, so whatever
+        Layer 5 does under real bed contention here is the same Layer 5
+        anyone would see on a quiet shift, just under load.
+        """
+        multiplier = max(0.5, multiplier)
+        baseline_count = max(1, round(len(_SURGE_TEMPLATES) / 2))
+        count = max(1, round(baseline_count * multiplier))
+        waiting_before = sum(1 for p in self.patients if p.status in ("waiting", "in-treatment"))
+
+        created = []
+        for i in range(count):
+            complaint, vitals = _SURGE_TEMPLATES[i % len(_SURGE_TEMPLATES)]
+            offset = (i / max(count - 1, 1)) * window_min
+            arrive_min = self.sim_minutes + offset
+            self.surge_seq += 1
+            pid, display_id = f"surge{self.surge_seq:02d}", f"PT S{self.surge_seq}"
+            age = 22 + (i * 17) % 58
+
+            p = simulation.SimPatient(
+                id=pid, display_id=display_id, age=age, arrival_mode="walk-in",
+                complaint=complaint, arrive_min=arrive_min,
+                timeline=[simulation.VitalsPoint(0.0, dict(zip(_VITAL_KEYS, vitals)))])
+            p.arrival_time = self.started_at + arrive_min * 60.0
+            if arrive_min <= self.sim_minutes:
+                p.status, p.arrived_at_min = "waiting", arrive_min
+            self.patients.append(p)
+
+            db.add_patient(self.conn, {
+                "id": p.id, "display_id": p.display_id, "age": p.age,
+                "arrival_mode": p.arrival_mode, "complaint": p.complaint,
+                "transcript": p.transcript, "nursing_assessment": p.nursing_assessment,
+                "status": p.status, "assigned_esi": p.assigned_esi,
+                "arrived_at": p.arrival_time})
+            created.append(display_id)
+
+        self.surge = {"active": True, "triggered_at": self.sim_minutes,
+                      "count": count, "multiplier": multiplier,
+                      "waiting_before": waiting_before}
+        self.log("surge", f"Surge triggered — {count} patients inbound over "
+                 f"the next {window_min:.0f} min (~{multiplier:.1f}x normal volume)")
+        return {"ok": True, "count": count, "patients": created}
+
     # ------------------------------------------------------------ intake form
     def create_intake_patient(self, body: "IntakeIn",
                               lab_out: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -452,7 +571,9 @@ class Engine:
             "sim_minutes": round(self.sim_minutes, 1),
             "engine": {"current_time": time.time()},
             "rows": rows,
-            "capacity": ward.capacity_summary(self.beds, self.clinicians),
+            "hospital_profile": self.hospital_profile,
+            "hospital_profile_options": ward.available_profiles(),
+            "capacity": ward.capacity_summary(self.beds, self.clinicians, self.hospital_profile),
             # Full roster, not just the aggregate above — the Ward Map page
             # needs individual identities and statuses to draw its
             # colour-coded boxes; the dashboard's Department State panel
@@ -467,6 +588,12 @@ class Engine:
             # built once at reset(), so there's no separate per-tick update
             # step to keep in sync with this.
             "ambulances": [ambulance.position_at(a, self.sim_minutes) for a in self.fleet],
+            # waiting_now recomputed fresh every call — the actual proof a
+            # surge did something is watching this number (and queue/bed
+            # contention elsewhere in this same payload) move, not the
+            # static count of how many were injected at trigger time.
+            "surge": {**self.surge,
+                     "waiting_now": sum(1 for p in self.patients if p.status in ("waiting", "in-treatment"))},
             "events": self.events[:14],
             "agreement": db.agreement_rate(self.conn),
             "model": layer1_vitals.model_metrics(),
@@ -1029,11 +1156,30 @@ async def api_admit(patient_id: str):
 
 @app.post("/api/control/{what}")
 async def api_control(what: str, value: str | None = None):
+    out: dict[str, Any] = {"ok": True}
     if what == "reset":
         engine.reset()
         await engine.prewarm_nlp()
+    elif what == "surge":
+        multiplier = float(value) if value else 3.0
+        out = engine.trigger_surge(multiplier=multiplier)
+    elif what == "profile":
+        ok = engine.set_hospital_profile(value or ward.DEFAULT_PROFILE)
+        out = {"ok": ok, "hospital_profile": engine.hospital_profile,
+              "available": ward.available_profiles()}
+        if ok:
+            await engine.prewarm_nlp()
+    elif what == "purge":
+        # Manual trigger for db.purge_stale_records — a real deployment
+        # would run this on a schedule (cron / APScheduler), out of scope
+        # for a prototype; exposing it here still makes the DPDP Act 2023
+        # storage-limitation duty a real, callable code path rather than
+        # only a docstring. `value` overrides the default 90-day window.
+        retention_days = float(value) if value else 90.0
+        out = {"ok": True, "retention_days": retention_days,
+              "purged": db.purge_stale_records(engine.conn, retention_days=retention_days)}
     await engine.broadcast()
-    return JSONResponse({"ok": True})
+    return JSONResponse(out)
 
 
 @app.get("/api/audit")
