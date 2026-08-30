@@ -251,8 +251,7 @@ export default function Landing() {
         <div className="landing-stats-hd">
           <h2>Measured, not asserted</h2>
           <p>
-            Held-out test set — every number below is a real measurement,
-            regenerated with <code>python -m backend.ml.train</code>.
+            Held-out test set — every number below is a real measurement, go to your virtual environment, regenerate with <code>python -m ml.train</code>.
           </p>
         </div>
         <div className="landing-stats-grid">

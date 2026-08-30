@@ -2,9 +2,9 @@
   "n_train": 48000,
   "n_test": 12000,
   "prevalence": 0.124,
-  "roc_auc": 0.8602,
-  "pr_auc": 0.6962,
-  "brier": 0.0602,
+  "roc_auc": 0.8614,
+  "pr_auc": 0.6984,
+  "brier": 0.06,
   "features": [
     "age",
     "heart_rate",
@@ -18,9 +18,9 @@
     "n_vitals_present"
   ],
   "data_source": "synthetic cohort (literature-calibrated) \u2014 see docstring",
-  "operating_threshold": 0.0501,
+  "operating_threshold": 0.0484,
   "sensitivity": 0.8501,
-  "precision": 0.2545,
-  "alert_rate": 0.4143,
+  "precision": 0.2468,
+  "alert_rate": 0.4271,
   "undertriage_rate": 0.0186
 }
