@@ -267,63 +267,7 @@ patients**, and we would not claim otherwise to a judge.
 
 ---
 
-## Round 2 guidelines — what changed and why
 
-The organisers' Round 2 guidelines were checked against this build line by line;
-six gaps were real, and all six are now closed and independently verified rather
-than merely claimed. Each is a load-bearing behaviour change, not a cosmetic one.
-
-**1. Pediatric-safe scoring.** Layer 1's XGBoost model is trained on an
-adult-calibrated synthetic cohort (NEWS2/qSOFA/shock-index literature — all adult
-frameworks). Fed a genuinely healthy 3-year-old's normal vitals (HR 128, RR 28 —
-alarming by adult thresholds, unremarkable for a toddler), it scored 97% risk. Two
-independent fixes, not one: `layer1b_heuristics.py`'s SIRS check now uses age-banded
-HR/RR thresholds (Goldstein 2005 pediatric-SIRS-consensus shape) instead of one
-adult cutoff for every age, and `layer3_fusion.py` discounts Layer 1's *vitals*
-weight by age band — 0.6× age 12–17, 0.25× age 6–11, **0×** under 6, where the raw
-model has no calibrated signal at all. A flat discount was tried first and measured
-insufficient (a 0.5× cut on a 97%-risk input still landed ESI II); the graduated,
-zero-at-the-floor version is what actually corrects it. Verified: PT 14 (age 3,
-elevated-for-adult vitals) now resolves ARI 0 / ESI V; a 45-year-old with the same
-raw numbers still resolves at the original adult-accurate score — the fix is
-age-scoped, not a global desensitisation.
-
-**2. Wait-time-triggered re-assessment.** Layer 4 previously escalated only on a
-*rising* score trend — a patient who arrived low-acuity and stayed flat, however
-long they waited, was invisible to it. `layer4_deterioration.py` now carries a
-second, independent trigger: CTAS-derived maximum safe wait windows per ESI tier
-(II: 15 min, III: 30 min, IV: 60 min, V: 120 min; ESI I is zero — always immediate).
-Breaching the window for a patient's own current tier raises a `reassessment_due`
-recommendation through the same nurse decision gate as every other escalation, even
-with an empty or entirely flat score history — the old trend-only path required at
-least two distinct scores to reason over at all.
-
-**3. Surge-mode demonstration.** `Engine.trigger_surge()` in `main.py` injects a
-burst of new patients — a deliberately heterogeneous mix of acuities, not N copies
-of the same complaint — staggered over a short window, so bed contention, routing
-pressure and queue reordering under 3× normal volume are things a judge can trigger
-and watch happen live, not something asserted in a slide. Reachable via
-`POST /api/control/surge?value=<multiplier>`.
-
-**4. A regulatory basis and real access control** — see the dedicated section
-below.
-
-**5. Hospital-scale configurability.** Ward capacity used to be four module-level
-constants — one fixed department shape, full stop. `data/hospital_profiles.json`
-now holds three named presets (`community_hospital`, the original default;
-`rural_ed`, six beds and a single generalist covering every specialty;
-`urban_trauma_center`, 28 beds and a deep on-call roster) that `ward.py` loads at
-runtime, with the original hardcoded numbers kept as an in-code fallback if the
-file is ever missing. `Engine.set_hospital_profile()` rebuilds the roster from any
-profile without a restart, rejecting an unknown name outright rather than falling
-over. Reachable via `POST /api/control/profile?value=rural_ed`.
-
-**6. Scenario depth.** The scripted demo grew from 13 to 16 patients: two
-pediatric cases (ages 3 and 8) that exercise gap #1 directly, and one adult case,
-each with physiology authored the same way as every other scripted patient — real
-vitals a real pipeline reasons over, nothing hand-scored.
-
----
 
 ## Regulatory basis and access control
 
