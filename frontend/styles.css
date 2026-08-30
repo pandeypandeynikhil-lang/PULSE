@@ -2260,6 +2260,55 @@ button.mic:disabled {
   font-size: 14px;
   margin: 72px auto 28px;
 }
+.landing-eyebrow-line--first {
+  margin-top: 88px;
+}
+
+/* Showcase strip — three illustrated cards under the hero, the one place
+   besides the hero itself where the page argues by image rather than by
+   list. Each panel is a hand-authored SVG (Landing.tsx's Art* components),
+   not a stock photo — same "no external imagery" rule the rest of the app
+   holds to, just drawn at illustration scale instead of icon scale. */
+.landing-showcase {
+  position: relative;
+  z-index: 1;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 24px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px;
+}
+.showcase-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.2);
+}
+.showcase-art {
+  aspect-ratio: 5 / 3;
+  background: #100b1c;
+  border-bottom: 1px solid var(--line);
+}
+.showcase-art svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.showcase-card h3 {
+  font-family: var(--display);
+  font-size: 16.5px;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 20px 22px 8px;
+}
+.showcase-card p {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--mute);
+  margin: 0 22px 22px;
+}
 
 .landing-features {
   position: relative;

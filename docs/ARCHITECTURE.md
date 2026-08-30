@@ -162,6 +162,46 @@ Practical details:
   can do, and running the English-only matcher against foreign text would silently
   produce an empty, misleadingly clean-looking result instead of an honest failure.
 
+## Two triggers, not one, in Layer 4
+
+`layer4_deterioration.assess()` used to have a single reason to escalate: a rising
+score trend, computed from at least two distinct persisted scores. That is real
+signal, but it is blind to a patient who arrived low-acuity and simply *stayed*
+low-acuity on paper while their safe reassessment window passed — nothing about a
+flat trend line looks like deterioration, even though an unassessed ESI III patient
+at 45 minutes is a real safety gap.
+
+`_wait_breach()` is a second, independent check against CTAS-derived maximum safe
+wait windows per ESI tier, and it runs regardless of whether there is enough score
+history for the trend check to fire at all — a brand-new patient with an empty
+history can still breach their window. `tick()` treats the two triggers as separate
+`elif` branches feeding the same `reassessment_due` recommendation path, rather than
+folding wait-breach into the trend calculation: they answer different questions
+("is it getting worse" vs. "has it been too long since anyone looked"), and
+conflating them would make either one harder to reason about or tune independently.
+
+## Why the pediatric vitals discount is graduated, not flat
+
+Layer 1's model is adult-calibrated by construction — the synthetic cohort's
+distributions come from adult emergency-medicine literature (NEWS2/qSOFA/shock
+index). Fed a well 3-year-old's normal vitals, it returned 97% risk, because
+tachycardia and tachypnea that would be alarming in an adult are simply what a
+healthy toddler's vitals look like.
+
+The first fix attempted was a single flat discount (0.5× the vitals weight for any
+patient under 18) — measured, live, and found insufficient: halving a 97%-risk
+input still produced ESI II. The lesson generalizes past this one number: a
+component that is answering the wrong question does not become a little bit right
+by being trusted a little bit less. `_vitals_weight()` in `layer3_fusion.py`
+instead grades the weight by how far a band's physiology plausibly sits from what
+the model actually learned — 0.6× for adolescents (closest to adult norms), 0.25×
+for ages 6–11, and a hard 0 under 6, where the model has no calibrated signal at
+all rather than a merely weak one. Layer 1b's independently age-banded SIRS check
+and Layer 2's symptom flags carry the pediatric decision instead — the same "drop
+what you can't trust" principle fusion already applies to an empty symptom
+component, just applied to vitals here. The nurse still sees the raw model output
+and its SHAP drivers in the UI either way; only its vote in the fused score changes.
+
 ## Known limits
 
 - **Layer 0 covers a minority of arrivals.** Most walk-ins generate no pre-arrival

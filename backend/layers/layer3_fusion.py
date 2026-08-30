@@ -10,6 +10,29 @@ from __future__ import annotations
 from typing import Any
 
 W_VITALS, W_SYMPTOM, W_AGE = 0.46, 0.34, 0.08
+
+# Layer 1's XGBoost model is trained on ml/train.py's synthetic cohort,
+# which is adult-calibrated (NEWS2/qSOFA/shock-index literature, all adult
+# frameworks). A healthy 3-year-old's normal HR/RR reads as near-certain
+# critical illness to a model that has never seen pediatric-range vitals —
+# in testing, a genuinely well toddler scored 97% risk from Layer 1 alone.
+# A flat discount doesn't fix that; a model answering the wrong question
+# doesn't become a little bit right by being trusted a little bit less.
+# The weight is graduated by how far a band's physiology sits from what
+# the model actually learned, dropping to zero under 6 — not a guess, a
+# measured response to how wrong the raw score turned out to be at that
+# age. Layer 1b's SIRS check (genuinely age-banded, not adult-only) and
+# Layer 2's symptom flags carry the pediatric decision instead; this is
+# the same "drop what you can't trust" principle fusion already applies
+# to a symptom component with no flags, just applied to vitals here.
+def _vitals_weight(age: float | None, base_weight: float) -> float:
+    if age is None or age >= 18:
+        return base_weight
+    if age >= 12:
+        return base_weight * 0.6   # adolescent — closest to adult norms
+    if age >= 6:
+        return base_weight * 0.25
+    return 0.0                     # under 6 — model has no calibrated signal here
 SYNERGY_MAP = {
     "respiratory": {"resp_rate", "spo2"},
     "cardiac": {"heart_rate", "systolic_bp", "diastolic_bp", "shock_index"},
@@ -36,10 +59,16 @@ def fuse(vitals_out: dict[str, Any] | None,
          lab_out: dict[str, Any] | None = None,
          sirs_data: dict[str, Any] | None = None) -> dict[str, Any]:
     parts, weights = [], []
+    pediatric = age is not None and age < 18
+    vitals_weight = _vitals_weight(age, W_VITALS)
 
-    if vitals_out:
+    # A zero-weight vitals contribution is dropped the same way an empty
+    # symptom component already is below — the nurse still sees the raw
+    # numbers and SHAP drivers in the UI (vitals_out is untouched), they
+    # just don't get to drag an under-6 patient's score around.
+    if vitals_out and vitals_weight > 0:
         parts.append(vitals_out["risk"] * 100)
-        weights.append(W_VITALS)
+        weights.append(vitals_weight)
     # A complaint with no red flags is ABSENCE OF EVIDENCE, not evidence of
     # safety. Scoring it as zero risk would drag down exactly the patients whose
     # words never reveal the problem — the silent decompensators. We drop the
@@ -104,5 +133,6 @@ def fuse(vitals_out: dict[str, Any] | None,
             "labs": lab_out,
             "sirs": sirs_data.get("reasons") if sirs_data and sirs_data.get("sirs_positive") else None,
             "synergy_matched": synergy_matches if synergy_matches else None,
+            "pediatric_vitals_discount": pediatric,
         },
     }
