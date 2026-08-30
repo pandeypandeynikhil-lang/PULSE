@@ -101,6 +101,29 @@ export default function PatientDrawer({
             <h4>Presenting complaint · Layer 2 extraction</h4>
             <div className="quote">{patient.complaint}</div>
           </div>
+          {patient.differential && patient.differential.length > 0 && (
+            <div className="sec">
+              <h4>Probable presentation · pattern-matched, not a diagnosis</h4>
+              <div className="diff-list">
+                {patient.differential.map((d) => (
+                  <div className="diff-row" key={d.name}>
+                    <div className="bar2">
+                      <div className="lb">
+                        <span>{d.name}</span>
+                        <span>{d.confidence}%</span>
+                      </div>
+                      <div className="tk"><i style={{ width: `${d.confidence}%` }} /></div>
+                    </div>
+                    <div className="diff-evidence">{d.evidence.join(" · ")}</div>
+                  </div>
+                ))}
+              </div>
+              <p className="diff-caveat">
+                Ranked from matched red flags, corroborating vitals, and SIRS status — for
+                clinician correlation, never a substitute for assessment.
+              </p>
+            </div>
+          )}
           {patient.lab_evaluation && patient.lab_evaluation.multiplier > 1 && (
             <div className="sec">
               <h4>Laboratory evaluation</h4>
