@@ -1843,14 +1843,17 @@ button.mic:disabled {
   color: #d84949;
   font-weight: 700;
 }
-.care-section {
-  border-top: 1px solid var(--line);
-  padding-top: 20px;
-}
 .care-block {
   display: grid;
   gap: 9px;
   margin-top: 15px;
+  padding-top: 15px;
+  border-top: 1px solid var(--line);
+}
+.care-block:first-of-type {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
 }
 .care-block strong {
   color: var(--ink);
@@ -1954,14 +1957,32 @@ button.mic:disabled {
   color: white !important;
   padding: 11px !important;
 }
+/* Every drawer section is its own outlined card, not a run-on stream of
+   text — a consistent boundary is what turns "everything the same weight,
+   scroll and squint" into something scannable: identity, clinical
+   reasoning, labs, vitals and care read as distinct chart tabs even though
+   nothing about the underlying data changed. Deliberately unfilled (the
+   drawer's own panel background shows through) rather than given its own
+   panel2 fill: every child inside a section — .quote, .vc, .med-row — is
+   already panel2-on-panel for its own contrast, and filling the section
+   itself panel2 too would flatten all of that back to one indistinguishable
+   layer. The border alone is enough to read as a card. */
 .sec {
-  margin-bottom: 22px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  padding: 16px 18px;
+  margin-bottom: 14px;
+}
+.sec:last-child {
+  margin-bottom: 0;
 }
 .sec h4 {
-  font-size: 13px;
+  font-size: 10.5px;
   font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   color: var(--purple);
-  margin-bottom: 11px;
+  margin-bottom: 12px;
 }
 .nlpbadge {
   font-size: 10.5px;
@@ -2042,6 +2063,30 @@ button.mic:disabled {
 }
 .bar2 .tk i.neg {
   background: linear-gradient(90deg, var(--green-deep), var(--green));
+}
+.diff-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.diff-row .bar2 {
+  margin-bottom: 4px;
+}
+.diff-row .lb span:first-child {
+  color: var(--ink);
+  font-weight: 600;
+}
+.diff-evidence {
+  font-size: 11.5px;
+  color: var(--dim);
+  line-height: 1.5;
+}
+.diff-caveat {
+  margin-top: 14px;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--dim);
+  line-height: 1.5;
 }
 .quote {
   background: var(--panel2);

@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field
 try:
     from . import ambulance, auth, db, simulation, ward
     from .layers import (layer1_vitals, layer1b_heuristics, layer2_symptom_nlp, layer2b_labs,
-                         layer3_fusion, layer4_deterioration, layer5_routing)
+                         layer2c_differential, layer3_fusion, layer4_deterioration, layer5_routing)
 except ImportError:
     # Supports `uvicorn main:app` when the working directory is backend/.
     import ambulance  # type: ignore[no-redef]
@@ -39,7 +39,7 @@ except ImportError:
     import simulation  # type: ignore[no-redef]
     import ward  # type: ignore[no-redef]
     from layers import (layer1_vitals, layer1b_heuristics, layer2_symptom_nlp, layer2b_labs,
-                        layer3_fusion, layer4_deterioration, layer5_routing)
+                        layer2c_differential, layer3_fusion, layer4_deterioration, layer5_routing)
 
 TICK_SECONDS = 1.0          # wall-clock cadence of the scheduler
 
@@ -176,10 +176,11 @@ class Engine:
         trend = layer4_deterioration.assess(history, waited, p.assigned_esi)
         systems = symptom["systems"]
         routing = layer5_routing.route(fused["esi"], systems, self.beds, self.clinicians)
+        differential = layer2c_differential.infer(symptom, sirs_data, vitals_out)
 
         return {"fused": fused, "vitals": vitals_raw, "vitals_out": vitals_out,
                 "symptom": symptom, "sirs": sirs_data, "trend": trend, "routing": routing,
-                "history": history, "waited": waited}
+                "history": history, "waited": waited, "differential": differential}
 
     # ----------------------------------------------------------------- tick
     async def tick(self) -> None:
@@ -563,6 +564,7 @@ class Engine:
                 "spans": res["symptom"]["spans"],
                 "nlp_source": res["symptom"].get("nlp_source", "lexicon"),
                 "escalation_reason": res["trend"].get("reason"),
+                "differential": res.get("differential", []),
             })
 
         order = {"I": 0, "II": 1, "III": 2, "IV": 3, "V": 4, None: 5}

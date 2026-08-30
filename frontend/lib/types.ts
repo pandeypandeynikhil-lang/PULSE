@@ -7,6 +7,7 @@ export interface Span {
 export interface Trend { rising: boolean; escalate: boolean; reason?: string; trace?: number[] }
 export interface Vital { [key: string]: number | null | undefined }
 export interface Driver { label: string; value?: string | number; direction: string; contribution: number }
+export interface Differential { name: string; system: string; confidence: number; evidence: string[] }
 
 export interface Routing {
   pathway: string; specialty: string; specialist_available: boolean; notes: string[];
@@ -28,6 +29,7 @@ export interface Patient {
   sirs?: string[] | null;
   synergy_matched?: string[] | null;
   vitals: Vital; vitals_present: number; drivers: Driver[]; spans: Span[]; nlp_source?: string;
+  differential?: Differential[];
   triage_vitals?: Vital;
   vital_deltas?: Vital;
   escalation_reason?: string | null;

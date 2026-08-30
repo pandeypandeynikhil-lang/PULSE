@@ -12,31 +12,67 @@ signal, and the bed it points to, for as long as the patient is waiting.
 
 ---
 
-## Run it
+## Contents
 
-Start the backend and frontend in separate terminals.
+[Setup](#setup) · [What to watch for](#what-to-watch-for) ·
+[The escalation is not scripted](#the-escalation-is-not-scripted) ·
+[Architecture](#architecture) · [Layer 1 model performance](#layer-1-model-performance) ·
+[Round 2 guidelines — what changed and why](#round-2-guidelines--what-changed-and-why) ·
+[Regulatory basis and access control](#regulatory-basis-and-access-control) ·
+[What is real and what is stubbed](#what-is-real-and-what-is-stubbed) ·
+[API](#api) · [Layout](#layout)
 
-**Terminal 1 - backend (Windows):**
+---
+
+## Setup
+
+Every step below, in order, on Windows, macOS, or Linux — two terminals, nothing
+skipped. The **core app needs only steps 1–4**; everything after that is optional
+and adds one specific feature.
+
+### 1. Prerequisites
+
+Python 3.10+, Node.js 18+ with npm, and git. `python --version` / `node --version`
+to check what you already have.
+
+### 2. Backend — install and train
+
+**Windows (PowerShell):**
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r backend/requirements.txt
-if (!(Test-Path backend/ml/artifacts/vitals_model.pkl)) { python -m backend.ml.train }
-python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+python -m backend.ml.train
 ```
 
-**Terminal 1 - backend (macOS/Linux):**
+**macOS / Linux:**
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r backend/requirements.txt
-[ -f backend/ml/artifacts/vitals_model.pkl ] || python -m backend.ml.train
+python -m backend.ml.train
+```
+
+`pip install` pulls in FastAPI, XGBoost, the Gemini/Groq SDKs, and Docling +
+langchain-ollama for lab-PDF parsing (step 6) — nothing here needs a paid key,
+an API call, or a GPU to *install*. `python -m backend.ml.train` trains Layer 1's
+XGBoost model on the synthetic cohort (~20 seconds) and writes
+`backend/ml/artifacts/vitals_model.pkl`; skip it and the backend trains the same
+model itself the first time it boots, so this step only saves you that first-run
+wait.
+
+### 3. Start the backend
+
+```bash
 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
-**Terminal 2 - frontend:**
+Leave this terminal running — it's the scheduler loop, re-scoring every waiting
+patient once a second for as long as it's up.
+
+### 4. Frontend
 
 ```bash
 cd frontend
@@ -44,8 +80,13 @@ npm install
 npm run dev
 ```
 
-Then open **http://localhost:3000**. First run trains the Layer 1 model
-(~20 seconds); after that it starts immediately.
+Open **http://localhost:3000**. That's the whole app, running fully offline —
+symptom extraction on the deterministic lexicon matcher, everything else at full
+strength: the six-layer scoring pipeline, the deterioration engine, Ward Map,
+ambulance tracking, medications/notes/discharge, surge mode, hospital-profile
+switching, access control. Only two things need anything past this point: richer
+LLM-based extraction (step 5) and lab-PDF upload (step 6) — both fail closed and
+say so plainly if skipped, never silently.
 
 Six routes, one live board underneath all of them: **`/`** is the landing page —
 what the product argues, before you touch it. **Triage Dashboard** (`/dashboard`)
@@ -57,16 +98,81 @@ roster Layer 5 actually routes against, editable in real time. **Patient Directo
 (`/patients`) searches every patient on record; each one opens onto a full chart
 (`/patients/[id]`) — medications, clinical notes, and discharge, detailed below.
 **Ambulance Tracking** (`/ambulances`) is a live radar of the inbound fleet, road
-routes and all.
+routes and all. The department is simulated continuously; reset it from the
+header when needed.
 
-Runs fully offline by default. To turn on the LLM NLP tier (and the Voice Intake
-panel, which needs it): `cp .env.example .env`, fill in `GEMINI_API_KEY` and/or
-`GROQ_API_KEY` (both have a free tier), set `PULSE_NLP_MODE=llm`.
+### 5. Optional — the LLM NLP tier (Voice Intake, richer red-flag extraction)
 
-The department is simulated continuously. Reset the simulation from the header
-when needed.
+Off by default (`PULSE_NLP_MODE=lexicon`); Layer 2's red-flag extraction runs on
+the deterministic lexicon matcher and Voice Intake is disabled until this is on.
 
-### What to watch for
+1. `cp .env.example .env`
+2. Get a free key from **Gemini** (https://aistudio.google.com) and/or **Groq**
+   (https://console.groq.com) — either is enough to turn the tier on; both is
+   better, since PULSE tries Gemini first and only falls to Groq if it fails, so
+   the second key is what makes that failover real rather than theoretical.
+3. Fill in `GEMINI_API_KEY` and/or `GROQ_API_KEY` in `.env`
+4. Set `PULSE_NLP_MODE=llm`
+5. Restart the backend (Ctrl+C, re-run the step 3 command)
+
+The console stamps every score with which tier actually answered
+(`llm-gemini` / `llm-groq` / `lexicon`) so the failover is something you watch
+happen, not a line in this file.
+
+### 6. Optional — lab report PDF parsing (Ollama + Llama 3.1)
+
+Patient Intake's PDF upload and the patient chart's "Upload lab report" panel go
+through `backend/lab/pipeline.py`: **Docling** turns the PDF into structured
+markdown, then a **locally-running Llama 3.1** (via **Ollama**) turns that
+markdown into structured test results — name, value, unit, reference range,
+abnormality flag — which Layer 2b then evaluates and Layer 1 scans for
+vital-sign-shaped entries. This is the one feature in PULSE that depends on a
+*local* LLM rather than Gemini/Groq or the offline lexicon, deliberately: parsing
+a layout-heavy pathology-report table is a job a small local model handles just
+as well as a cloud one, and this way no lab data — someone's actual blood work —
+ever has to leave the machine to be read.
+
+1. **Install Ollama** — https://ollama.com/download (Windows, macOS, Linux). The
+   installer starts the Ollama server as a background service automatically; you
+   don't run anything to keep it alive.
+2. **Pull the model:**
+   ```bash
+   ollama pull llama3.1
+   ```
+   ~4.7 GB, one-time download. Confirm it landed with `ollama list`.
+3. That's it — **no `.env` entry required.** `POST /api/extract-lab` talks to
+   Ollama on its default `localhost:11434` the next time a PDF is uploaded.
+4. To point this at a different local model instead (a smaller one on a slower
+   machine, say — anything `ollama pull`-able works, since `langchain-ollama`
+   only needs a model name), set `PULSE_LAB_OLLAMA_MODEL=<model name>` in `.env`
+   and pull that model instead of `llama3.1`.
+
+If Ollama isn't running, or the model was never pulled, PDF upload fails with a
+plain `422` naming the actual problem — never silently. Nothing else in PULSE
+needs Ollama: every other feature, including the full scoring pipeline, works
+with it never installed at all.
+
+### 7. Optional — refresh the live ambulance routes
+
+`data/ambulance_routes.json` ships pre-fetched and committed, so this step is
+**never required** to run the app — `Engine.reset()` only ever reads that file.
+To regenerate it against OSRM's live routing service instead of the cached one:
+
+```bash
+python -m backend.ambulance
+```
+
+### 8. Optional — change the access-control token before any real deployment
+
+`PULSE_API_TOKEN` / `NEXT_PUBLIC_API_TOKEN` in `.env` default to a fixed demo
+value (`pulse-demo-2026`) so every write endpoint is protected out of the box
+with zero setup — see [Regulatory basis and access control](#regulatory-basis-and-access-control).
+Change both (they must match) before deploying anywhere real; leave them alone
+for local development and demoing.
+
+---
+
+## What to watch for
 
 | Time | What happens |
 |---|---|
@@ -161,63 +267,7 @@ patients**, and we would not claim otherwise to a judge.
 
 ---
 
-## Round 2 guidelines — what changed and why
 
-The organisers' Round 2 guidelines were checked against this build line by line;
-six gaps were real, and all six are now closed and independently verified rather
-than merely claimed. Each is a load-bearing behaviour change, not a cosmetic one.
-
-**1. Pediatric-safe scoring.** Layer 1's XGBoost model is trained on an
-adult-calibrated synthetic cohort (NEWS2/qSOFA/shock-index literature — all adult
-frameworks). Fed a genuinely healthy 3-year-old's normal vitals (HR 128, RR 28 —
-alarming by adult thresholds, unremarkable for a toddler), it scored 97% risk. Two
-independent fixes, not one: `layer1b_heuristics.py`'s SIRS check now uses age-banded
-HR/RR thresholds (Goldstein 2005 pediatric-SIRS-consensus shape) instead of one
-adult cutoff for every age, and `layer3_fusion.py` discounts Layer 1's *vitals*
-weight by age band — 0.6× age 12–17, 0.25× age 6–11, **0×** under 6, where the raw
-model has no calibrated signal at all. A flat discount was tried first and measured
-insufficient (a 0.5× cut on a 97%-risk input still landed ESI II); the graduated,
-zero-at-the-floor version is what actually corrects it. Verified: PT 14 (age 3,
-elevated-for-adult vitals) now resolves ARI 0 / ESI V; a 45-year-old with the same
-raw numbers still resolves at the original adult-accurate score — the fix is
-age-scoped, not a global desensitisation.
-
-**2. Wait-time-triggered re-assessment.** Layer 4 previously escalated only on a
-*rising* score trend — a patient who arrived low-acuity and stayed flat, however
-long they waited, was invisible to it. `layer4_deterioration.py` now carries a
-second, independent trigger: CTAS-derived maximum safe wait windows per ESI tier
-(II: 15 min, III: 30 min, IV: 60 min, V: 120 min; ESI I is zero — always immediate).
-Breaching the window for a patient's own current tier raises a `reassessment_due`
-recommendation through the same nurse decision gate as every other escalation, even
-with an empty or entirely flat score history — the old trend-only path required at
-least two distinct scores to reason over at all.
-
-**3. Surge-mode demonstration.** `Engine.trigger_surge()` in `main.py` injects a
-burst of new patients — a deliberately heterogeneous mix of acuities, not N copies
-of the same complaint — staggered over a short window, so bed contention, routing
-pressure and queue reordering under 3× normal volume are things a judge can trigger
-and watch happen live, not something asserted in a slide. Reachable via
-`POST /api/control/surge?value=<multiplier>`.
-
-**4. A regulatory basis and real access control** — see the dedicated section
-below.
-
-**5. Hospital-scale configurability.** Ward capacity used to be four module-level
-constants — one fixed department shape, full stop. `data/hospital_profiles.json`
-now holds three named presets (`community_hospital`, the original default;
-`rural_ed`, six beds and a single generalist covering every specialty;
-`urban_trauma_center`, 28 beds and a deep on-call roster) that `ward.py` loads at
-runtime, with the original hardcoded numbers kept as an in-code fallback if the
-file is ever missing. `Engine.set_hospital_profile()` rebuilds the roster from any
-profile without a restart, rejecting an unknown name outright rather than falling
-over. Reachable via `POST /api/control/profile?value=rural_ed`.
-
-**6. Scenario depth.** The scripted demo grew from 13 to 16 patients: two
-pediatric cases (ages 3 and 8) that exercise gap #1 directly, and one adult case,
-each with physiology authored the same way as every other scripted patient — real
-vitals a real pipeline reasons over, nothing hand-scored.
-
----
 
 ## Regulatory basis and access control
 
