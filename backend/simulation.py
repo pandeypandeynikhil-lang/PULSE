@@ -46,6 +46,7 @@ class SimPatient:
     arrival_time: float | None = None
     last_recommendation: int | None = None
     escalated: bool = False
+    reassessment_flagged: bool = False   # one-shot latch for the wait-time trigger
     seen_at_min: float | None = None
     seed_esi: str | None = None   # acuity already assigned before the shift
     lab_out: dict[str, Any] | None = None
@@ -179,6 +180,34 @@ def build_scenario() -> list[SimPatient]:
         id="p13", display_id="PT 13", age=29, arrival_mode="walk-in",
         complaint="ankle sprain playing football",
         arrive_min=22.0, timeline=_partial_first(_steady(80, 126, 80, 15, 99, 36.7, rng=rng)),
+    ))
+
+    # PT 14 — the pediatric case. Vitals are elevated by adult standards
+    # (HR 128, RR 28) but genuinely normal for a well 3-year-old; a system
+    # scoring every patient against one adult-calibrated threshold would
+    # force this child through Layer 3's SIRS floor into ESI II for a mild
+    # viral illness. Layer 1b's age-banded thresholds are what keeps this
+    # from happening — see layer1b_heuristics.py.
+    P.append(SimPatient(
+        id="p14", display_id="PT 14", age=3, arrival_mode="walk-in",
+        complaint="fussy and warm since yesterday, not eating well",
+        arrive_min=-18.0,
+        timeline=_partial_first(_steady(128, 98, 62, 28, 98, 37.8, n=5, step=7, rng=rng)),
+        seed_esi="IV",
+    ))
+
+    P.append(SimPatient(
+        id="p15", display_id="PT 15", age=8, arrival_mode="walk-in",
+        complaint="fell off a bike, arm pain, no other injuries seen",
+        arrive_min=30.0,
+        timeline=_partial_first(_steady(112, 104, 68, 24, 99, 37.0, rng=rng)),
+    ))
+
+    P.append(SimPatient(
+        id="p16", display_id="PT 16", age=41, arrival_mode="walk-in",
+        complaint="vomiting and diarrhoea since last night, feels weak",
+        arrive_min=-2.0, timeline=_partial_first(_steady(102, 108, 70, 18, 98, 37.3, rng=rng)),
+        seed_esi="III",
     ))
     return P
 

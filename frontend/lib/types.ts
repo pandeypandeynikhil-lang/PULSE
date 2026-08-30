@@ -67,6 +67,17 @@ export interface Clinician {
   id: string; name: string; specialty: string; status: ClinicianStatus; patient_id: string | null;
 }
 
+export type AmbulanceStatus = "dispatched" | "en_route" | "arrived";
+
+export interface AmbulancePosition {
+  id: string; display_id: string; origin: string; note: string;
+  status: AmbulanceStatus;
+  distance_km: number; eta_min: number; bearing: number;
+  total_distance_km: number; progress: number;
+  vehicle_number: string; driver: string; paramedic: string;
+  vehicle_type: string; callsign: string;
+}
+
 export interface BoardState {
   rows: Patient[];
   sim_minutes: number;
@@ -74,6 +85,7 @@ export interface BoardState {
   capacity: { beds: Record<string, number>; specialists: Record<string, number>; staff_on: number };
   beds: Bed[];
   clinicians: Clinician[];
+  ambulances: AmbulancePosition[];
   agreement: { rate: number | null; total: number; accepted: number };
   events: { at: string; kind: string; text: string }[];
   model: { roc_auc: number; sensitivity: number; undertriage_rate: number; n_test: number };

@@ -2260,6 +2260,55 @@ button.mic:disabled {
   font-size: 14px;
   margin: 72px auto 28px;
 }
+.landing-eyebrow-line--first {
+  margin-top: 88px;
+}
+
+/* Showcase strip — three illustrated cards under the hero, the one place
+   besides the hero itself where the page argues by image rather than by
+   list. Each panel is a hand-authored SVG (Landing.tsx's Art* components),
+   not a stock photo — same "no external imagery" rule the rest of the app
+   holds to, just drawn at illustration scale instead of icon scale. */
+.landing-showcase {
+  position: relative;
+  z-index: 1;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 24px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px;
+}
+.showcase-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.2);
+}
+.showcase-art {
+  aspect-ratio: 5 / 3;
+  background: #100b1c;
+  border-bottom: 1px solid var(--line);
+}
+.showcase-art svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.showcase-card h3 {
+  font-family: var(--display);
+  font-size: 16.5px;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 20px 22px 8px;
+}
+.showcase-card p {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--mute);
+  margin: 0 22px 22px;
+}
 
 .landing-features {
   position: relative;
@@ -2402,3 +2451,83 @@ button.mic:disabled {
     align-items: flex-start;
   }
 }
+
+
+/* ---------- ambulance radar ---------- */
+/* No map tiles, no external SDK — bearing/distance radar, deliberately
+   larger and higher-contrast than the first pass: a radial glow, a
+   sweeping scan wedge, and a marker built as a real emergency badge
+   (red circle + white cross) rather than a plain dot, so status and
+   identity both read at a glance instead of needing the side list to
+   confirm what's on screen. */
+.radar-layout{display:grid;grid-template-columns:1fr 340px;gap:18px;margin-top:8px;align-items:start}
+.radar-wrap{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:18px;
+  padding:20px;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  box-shadow:0 6px 24px rgba(0,0,0,.28)}
+.radar-svg{width:100%;max-width:540px;height:auto}
+.radar-ring{fill:none;stroke:rgba(185,166,255,.16);stroke-width:1.2;stroke-dasharray:3 5}
+.radar-ring-label{font-family:var(--mono);font-size:10.5px;font-weight:600;fill:var(--mute)}
+.radar-axis{stroke:rgba(185,166,255,.1);stroke-width:1}
+.radar-hospital{fill:var(--purple);stroke:var(--bg);stroke-width:3}
+.radar-hospital-pulse{fill:none;stroke:var(--purple);stroke-width:2;opacity:.5;
+  animation:radarHospitalPulse 2.4s ease-out infinite}
+@keyframes radarHospitalPulse{0%{r:13;opacity:.55}100%{r:34;opacity:0}}
+.radar-center-label{position:absolute;top:calc(50% - 10px);left:50%;transform:translate(-50%,-50%);
+  font-family:var(--mono);font-size:9.5px;font-weight:800;color:#100B1B;pointer-events:none;letter-spacing:.02em}
+.radar-sweep-group{animation:radarSweep 5s linear infinite}
+@keyframes radarSweep{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+.radar-sweep{fill:url(#radarFace);opacity:.9}
+
+/* Marker: red badge, white cross — the professional EMS-marker convention,
+   legible at a size a full vehicle silhouette wouldn't survive. */
+.radar-marker{cursor:pointer;transition:transform 1s linear}
+.radar-marker-badge{fill:var(--red-deep);stroke:#100B1B;stroke-width:2}
+.radar-marker-cross{stroke:#fff;stroke-width:2.4;stroke-linecap:round}
+.radar-marker-label{font-family:var(--mono);font-size:10.5px;font-weight:700;fill:var(--ink);text-anchor:middle}
+.radar-marker-pulse{fill:none;stroke:var(--red-deep);stroke-width:2;opacity:.55;
+  animation:radarMarkerPulse 1.8s ease-out infinite}
+@keyframes radarMarkerPulse{0%{r:11;opacity:.6}100%{r:24;opacity:0}}
+.radar-marker.dispatched .radar-marker-badge{fill:var(--amber-deep)}
+.radar-marker.arrived{opacity:.4}
+.radar-marker.arrived .radar-marker-badge{fill:var(--dim)}
+.radar-marker.selected .radar-marker-badge{stroke:var(--ink);stroke-width:3}
+.radar-marker:hover .radar-marker-badge{filter:brightness(1.15)}
+
+.radar-legend{display:flex;gap:16px;margin-top:14px;font-size:11.5px;color:var(--mute)}
+.radar-legend span{display:flex;align-items:center;gap:6px}
+.radar-legend .dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+.radar-legend .dot.en-route{background:var(--red-deep)}
+.radar-legend .dot.dispatched{background:var(--amber-deep)}
+.radar-legend .dot.arrived{background:var(--dim)}
+
+.radar-list{display:flex;flex-direction:column;gap:12px;max-height:640px;overflow-y:auto}
+.radar-card{display:block;width:100%;text-align:left;font:inherit;cursor:pointer;
+  background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:15px 17px;
+  box-shadow:0 4px 16px rgba(0,0,0,.18);transition:.15s}
+.radar-card:hover{border-color:var(--red-deep);transform:translateY(-1px)}
+.radar-card.selected{border-color:var(--red-deep);box-shadow:0 0 0 1px var(--red-deep)}
+.radar-card.arrived{opacity:.5}
+.radar-card-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+.radar-card-hd strong{font-family:var(--mono);color:var(--ink);font-size:13px}
+.radar-status{font-size:9.5px;text-transform:uppercase;letter-spacing:.06em;font-weight:700;
+  padding:3px 9px;border-radius:99px;background:var(--panel2);color:var(--mute)}
+.radar-status.en-route{color:var(--red);background:rgba(232,99,126,.14)}
+.radar-status.dispatched{color:var(--amber);background:rgba(224,163,74,.12)}
+.radar-status.arrived{color:var(--dim)}
+.radar-origin{font-size:12px;color:var(--mute);margin-top:5px}
+.radar-note{font-size:12px;color:var(--dim);margin-top:2px;font-style:italic}
+.radar-metrics{display:flex;gap:18px;margin-top:11px;font-size:12px;color:var(--mute)}
+.radar-metrics b{color:var(--ink);font-family:var(--mono);font-weight:700}
+.radar-progress{height:4px;border-radius:3px;background:var(--line2);margin-top:11px;overflow:hidden}
+.radar-progress i{display:block;height:100%;background:var(--red-deep);transition:width 1s linear}
+
+/* Click-through detail panel — reuses .drawer/.scrim/.sec/.quote from the
+   patient drawer for visual consistency; only the content grid is new. */
+.radar-details{display:flex;flex-direction:column;gap:9px}
+.radar-detail-row{display:flex;justify-content:space-between;gap:14px;font-size:13px;
+  padding-bottom:9px;border-bottom:1px solid var(--line2)}
+.radar-detail-row:last-child{border-bottom:0;padding-bottom:0}
+.radar-detail-row span{color:var(--mute)}
+.radar-detail-row b{color:var(--ink);font-family:var(--mono);font-weight:600;text-align:right}
+
+@media(max-width:900px){.radar-layout{grid-template-columns:1fr}}

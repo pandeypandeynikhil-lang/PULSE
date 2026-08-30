@@ -1,7 +1,45 @@
-"""Layer 1b - deterministic clinical safety heuristics."""
+"""Layer 1b - deterministic clinical safety heuristics.
+
+SIRS (Systemic Inflammatory Response Syndrome) criteria, age-banded — not
+one adult-calibrated threshold applied to every patient. A healthy
+3-year-old's resting heart rate sits well above 90 and their respiratory
+rate well above 20; scored against the adult thresholds below, every
+toddler in the department would trigger a false SIRS positive and get
+force-escalated by Layer 3's SIRS floor regardless of how well they
+actually are. That is exactly the "silent safety risk" a single
+adult-calibrated model creates. The bands below are published pediatric
+vital-sign reference ranges (the shape of criteria used in the Goldstein
+2005 pediatric sepsis consensus definitions, simplified to the two signals
+this layer already checks), applied up to age 12; from 12 up this
+collapses back to the original adult thresholds, which were never wrong,
+only silently mis-applied to patients they were never calibrated for.
+"""
 from __future__ import annotations
 
 from typing import Any
+
+# age < N years -> (heart-rate-high threshold, resp-rate-high threshold).
+# Ordered youngest-first; the first band whose upper bound exceeds the
+# patient's age wins. 12+ falls through to the adult thresholds below.
+_PEDIATRIC_BANDS = [
+    (1, 180, 50),   # infant
+    (3, 140, 40),   # toddler
+    (6, 130, 34),   # preschool / early school-age
+    (12, 120, 30),  # school-age / pre-adolescent
+]
+_ADULT_HR_HIGH = 90
+_ADULT_RR_HIGH = 20
+
+
+def _age_thresholds(age: float | None) -> tuple[float, float]:
+    """Returns (heart_rate_high, resp_rate_high) for this patient's age.
+    None or 12+ gets the adult thresholds this layer always used."""
+    if age is None:
+        return _ADULT_HR_HIGH, _ADULT_RR_HIGH
+    for max_age, hr_high, rr_high in _PEDIATRIC_BANDS:
+        if age < max_age:
+            return hr_high, rr_high
+    return _ADULT_HR_HIGH, _ADULT_RR_HIGH
 
 
 def _number(value: Any) -> float | None:
@@ -14,6 +52,8 @@ def _number(value: Any) -> float | None:
 def evaluate_sirs(vitals: dict, lab_results: list[dict] | None = None) -> dict:
     criteria_count = 0
     met_conditions: list[str] = []
+    age = _number(vitals.get("age"))
+    hr_high, rr_high = _age_thresholds(age)
 
     temperature = _number(vitals.get("temperature"))
     if temperature is not None and (temperature > 38.0 or temperature < 36.0):
@@ -21,14 +61,18 @@ def evaluate_sirs(vitals: dict, lab_results: list[dict] | None = None) -> dict:
         met_conditions.append("Abnormal Temp")
 
     heart_rate = _number(vitals.get("heart_rate"))
-    if heart_rate is not None and heart_rate > 90:
+    if heart_rate is not None and heart_rate > hr_high:
         criteria_count += 1
-        met_conditions.append("Tachycardia")
+        met_conditions.append(
+            "Tachycardia" if age is None or age >= 12
+            else f"Tachycardia (>{hr_high} bpm for age {int(age)})")
 
     resp_rate = _number(vitals.get("resp_rate"))
-    if resp_rate is not None and resp_rate > 20:
+    if resp_rate is not None and resp_rate > rr_high:
         criteria_count += 1
-        met_conditions.append("Tachypnea")
+        met_conditions.append(
+            "Tachypnea" if age is None or age >= 12
+            else f"Tachypnea (>{rr_high}/min for age {int(age)})")
 
     for result in lab_results or []:
         if not isinstance(result, dict):

@@ -47,12 +47,17 @@ npm run dev
 Then open **http://localhost:3000**. First run trains the Layer 1 model
 (~20 seconds); after that it starts immediately.
 
-Three pages, one live board underneath all of them: **Patient Intake** (`/intake`)
-enters demographics, vitals, dictated clinical notes, and sequentially uploaded PDF
-lab reports, and submitting puts a real patient on the board. **Triage Dashboard**
-(`/dashboard`) is the live operational board, department state, shadow-mode
-agreement, and audit log. **Ward Map** (`/ward`) is the colour-coded bed and
-clinician roster Layer 5 actually routes against, editable in real time.
+Six routes, one live board underneath all of them: **`/`** is the landing page —
+what the product argues, before you touch it. **Triage Dashboard** (`/dashboard`)
+is the live operational board, department state, shadow-mode agreement, and audit
+log. **Patient Intake** (`/intake`) enters demographics, vitals, dictated clinical
+notes, and sequentially uploaded PDF lab reports, and submitting puts a real
+patient on the board. **Ward Map** (`/ward`) is the colour-coded bed and clinician
+roster Layer 5 actually routes against, editable in real time. **Patient Directory**
+(`/patients`) searches every patient on record; each one opens onto a full chart
+(`/patients/[id]`) — medications, clinical notes, and discharge, detailed below.
+**Ambulance Tracking** (`/ambulances`) is a live radar of the inbound fleet, road
+routes and all.
 
 Runs fully offline by default. To turn on the LLM NLP tier (and the Voice Intake
 panel, which needs it): `cp .env.example .env`, fill in `GEMINI_API_KEY` and/or
@@ -104,10 +109,12 @@ anywhere in the codebase.
 | Layer | File | What it does |
 |---|---|---|
 | **1** | `layers/layer1_vitals.py` | XGBoost on whatever vitals exist. Missing fields stay `NaN` — never imputed and passed off as measured |
+| **1b** | `layers/layer1b_heuristics.py` | Deterministic SIRS check, age-banded — a pediatric-safe floor the ML model alone can't provide (below) |
 | **2** | `layers/layer2_symptom_nlp.py` | Red-flag extraction from the chief complaint, returning the **exact spans** that matched |
+| **2b** | `layers/layer2b_labs.py` | LLM evaluation of an uploaded lab panel against reference ranges, with a deterministic fallback |
 | **3** | `layers/layer3_fusion.py` | Transparent weighted fusion into the Arrival Risk Index, mapped to ESI I–V with a confidence band |
-| **4** | `layers/layer4_deterioration.py` | Re-scores every waiting patient as a time series and escalates on slope |
-| **5** | `layers/layer5_routing.py` | Suggests a *named* bed and clinician from the live `ward.py` roster, not just a pathway and a count |
+| **4** | `layers/layer4_deterioration.py` | Re-scores every waiting patient as a time series and escalates on slope **or** an overdue reassessment |
+| **5** | `layers/layer5_routing.py` | Suggests a *named* bed and clinician from a hospital-scale-specific `ward.py` roster, not just a pathway and a count |
 
 ### Three decisions worth defending
 
@@ -154,12 +161,108 @@ patients**, and we would not claim otherwise to a judge.
 
 ---
 
+## Round 2 guidelines — what changed and why
+
+The organisers' Round 2 guidelines were checked against this build line by line;
+six gaps were real, and all six are now closed and independently verified rather
+than merely claimed. Each is a load-bearing behaviour change, not a cosmetic one.
+
+**1. Pediatric-safe scoring.** Layer 1's XGBoost model is trained on an
+adult-calibrated synthetic cohort (NEWS2/qSOFA/shock-index literature — all adult
+frameworks). Fed a genuinely healthy 3-year-old's normal vitals (HR 128, RR 28 —
+alarming by adult thresholds, unremarkable for a toddler), it scored 97% risk. Two
+independent fixes, not one: `layer1b_heuristics.py`'s SIRS check now uses age-banded
+HR/RR thresholds (Goldstein 2005 pediatric-SIRS-consensus shape) instead of one
+adult cutoff for every age, and `layer3_fusion.py` discounts Layer 1's *vitals*
+weight by age band — 0.6× age 12–17, 0.25× age 6–11, **0×** under 6, where the raw
+model has no calibrated signal at all. A flat discount was tried first and measured
+insufficient (a 0.5× cut on a 97%-risk input still landed ESI II); the graduated,
+zero-at-the-floor version is what actually corrects it. Verified: PT 14 (age 3,
+elevated-for-adult vitals) now resolves ARI 0 / ESI V; a 45-year-old with the same
+raw numbers still resolves at the original adult-accurate score — the fix is
+age-scoped, not a global desensitisation.
+
+**2. Wait-time-triggered re-assessment.** Layer 4 previously escalated only on a
+*rising* score trend — a patient who arrived low-acuity and stayed flat, however
+long they waited, was invisible to it. `layer4_deterioration.py` now carries a
+second, independent trigger: CTAS-derived maximum safe wait windows per ESI tier
+(II: 15 min, III: 30 min, IV: 60 min, V: 120 min; ESI I is zero — always immediate).
+Breaching the window for a patient's own current tier raises a `reassessment_due`
+recommendation through the same nurse decision gate as every other escalation, even
+with an empty or entirely flat score history — the old trend-only path required at
+least two distinct scores to reason over at all.
+
+**3. Surge-mode demonstration.** `Engine.trigger_surge()` in `main.py` injects a
+burst of new patients — a deliberately heterogeneous mix of acuities, not N copies
+of the same complaint — staggered over a short window, so bed contention, routing
+pressure and queue reordering under 3× normal volume are things a judge can trigger
+and watch happen live, not something asserted in a slide. Reachable via
+`POST /api/control/surge?value=<multiplier>`.
+
+**4. A regulatory basis and real access control** — see the dedicated section
+below.
+
+**5. Hospital-scale configurability.** Ward capacity used to be four module-level
+constants — one fixed department shape, full stop. `data/hospital_profiles.json`
+now holds three named presets (`community_hospital`, the original default;
+`rural_ed`, six beds and a single generalist covering every specialty;
+`urban_trauma_center`, 28 beds and a deep on-call roster) that `ward.py` loads at
+runtime, with the original hardcoded numbers kept as an in-code fallback if the
+file is ever missing. `Engine.set_hospital_profile()` rebuilds the roster from any
+profile without a restart, rejecting an unknown name outright rather than falling
+over. Reachable via `POST /api/control/profile?value=rural_ed`.
+
+**6. Scenario depth.** The scripted demo grew from 13 to 16 patients: two
+pediatric cases (ages 3 and 8) that exercise gap #1 directly, and one adult case,
+each with physiology authored the same way as every other scripted patient — real
+vitals a real pipeline reasons over, nothing hand-scored.
+
+---
+
+## Regulatory basis and access control
+
+PULSE's own ambulance-tracking layer anchors this deployment to India — a
+Bengaluru-based fleet, real OSRM road-network routing (`backend/ambulance.py`) — so
+the assumed regulatory jurisdiction is India's **Digital Personal Data Protection
+Act, 2023**. Section 8(5) puts a "reasonable security safeguards" duty on anyone
+processing personal data; an emergency department's patient names, ages,
+complaints and vitals are squarely that, and an unauthenticated API where anyone on
+the network can create, edit or discharge a patient record fails that duty
+regardless of how good the triage logic behind it is.
+
+`backend/auth.py` + a blanket FastAPI middleware in `main.py` close that gap:
+**every write under `/api/*`** — intake, voice intake, translation, decide, admit,
+discharge, medications, clinical notes, ward status, lab upload, and the control
+endpoints above — requires an `X-PULSE-Token` header matching `PULSE_API_TOKEN`
+(`.env`; defaults to a fixed demo value so the app still runs out of the box, but
+never on an *unknown* value). Reads — the board, audit log, model metrics — stay
+open, matching how the console is actually used: a display surface meant to be
+visible department-wide, the same way a physical whiteboard would be. The frontend
+sends the header automatically on every mutating call (`frontend/lib/api.ts`); a
+request without it gets a `401` before any handler runs. A single shared token
+rather than per-user accounts is a deliberate scope decision for a prototype — real
+deployment sits behind hospital SSO/RBAC, and the `actor` column already in
+`db.py`'s decisions table is where per-clinician identity would attach; what this
+layer proves is that the write surface is gated at all, which is the DPDP-relevant
+claim.
+
+The Act's storage-limitation duty (s.8(7): erase personal data once its purpose is
+served) is likewise a real code path, not a policy statement: `db.purge_stale_records()`
+removes a patient and everything that references them — scores, medications,
+notes, recommendations, decisions — once their most recent score is older than a
+configurable retention window (90 days by default), cascading through every table
+so nothing is left orphaned. Reachable via `POST /api/control/purge?value=<days>`;
+a real deployment would run it on a schedule rather than on demand.
+
+---
+
 ## What is real and what is stubbed
 
 **Real:** the XGBoost model and its SHAP attributions · the full six-layer scoring
 pipeline · the scheduler loop · SQLite persistence with append-only scores · the audit
 trail · the override flow · shadow-mode agreement tracking · WebSocket push with
-polling fallback.
+polling fallback · live ambulance tracking on real, cached OSRM road routes · the
+medication, clinical-notes and discharge workflow on a patient's chart.
 
 **Stubbed, deliberately:** the scripted scenario's patient arrivals and vitals come
 from `simulation.py` rather than live monitors, and the bed/clinician roster (below)
@@ -220,24 +323,75 @@ temperature, respiratory rate — and used to pre-fill the vitals fields, so a r
 that happens to carry a physical-exam block doesn't need those numbers retyped by
 hand.
 
+**Live ambulance tracking is real road routing, not a straight line on a map.**
+`backend/ambulance.py` fetches each inbound vehicle's route from OSRM
+(project-osrm.org) — a real Bengaluru road-network polyline — exactly once, at
+`python -m backend.ambulance` time, and caches it to `data/ambulance_routes.json`,
+committed with the project. `Engine.reset()` only ever reads that cached file; it
+never calls OSRM live, so a demo's Reset button can never depend on the venue's
+wifi or a third-party service being up, and a route that was never fetched falls
+back to a straight line rather than breaking. Every tick, `position_at()`
+interpolates each ambulance's live bearing and distance from the hospital along
+its real route — the same "author the ground truth once, let the engine compute
+the live state" pattern `simulation.py` uses for physiology, applied to geography.
+The Ambulance Tracking page (`frontend/app/ambulances`, `components/AmbulanceRadar`)
+renders it as a radar: click a marker for that vehicle's crew, unit number, and
+live ETA. This is also Layer 0's actual pre-arrival signal source in the running
+app — an inbound ambulance's distance and ETA feed the board before the patient
+is ever at the door.
+
+**A patient's chart doesn't end at triage.** `/patients` searches every patient on
+record; opening one (`/patients/[id]`) reaches a full medication and notes
+workflow that exists independently of the scoring pipeline. Medications can be
+scheduled ahead (`POST /api/medications/schedule`) or given immediately in an
+emergency (`POST /api/medications/emergency`, which schedules and records the
+administration in one call); every administration is a `given` / `held` /
+`refused` / `not_available` / `cancelled` record, and the API rejects a `held` or
+`refused` entry with no reason — the record can't silently go quiet on why a dose
+wasn't given. Each administration carries an actor (`X-Actor-Id` header, default
+`demo-nurse`) — a real per-action identity already threading through the
+medication trail, ahead of where the rest of the audit rail (`db.py`'s decisions
+table) currently only records a fixed `"triage nurse"`. Clinical notes
+(`POST /api/patients/{id}/notes`, typed `surgical` / `follow_up`) and discharge
+(`POST /api/discharge/{id}`) round it out: discharging writes the discharge
+summary and any follow-up instructions as clinical notes, moves the patient to
+`discharged`, and releases their bed and clinician back to the Ward Map roster.
+
 ---
 
 ## API
 
+Every endpoint below except the `GET`s and `WS /ws` requires an `X-PULSE-Token`
+header (see **Regulatory basis and access control** above) — the frontend sends it
+automatically; a `curl`/Postman call needs it added by hand.
+
 | Endpoint | Purpose |
 |---|---|
-| `GET /api/board` | Full board state — patients, ward roster, capacity, audit feed |
+| `GET /api/board` | Full board state — patients, ward roster, capacity, surge status, audit feed |
 | `WS /ws` | Live push, ~1s cadence |
 | `POST /api/decide/{id}/accept` | Nurse accepts the recommendation — commits the suggested bed & clinician |
 | `POST /api/decide/{id}/override?esi=III` | Nurse overrides — recomputes routing for the overridden ESI, logged |
 | `POST /api/admit/{id}` | Move patient to their bed |
 | `POST /api/voice-intake` | Voice Intake — `{transcript, lang}` in, a new patient scored and queued out. Requires the LLM tier |
+| `POST /api/translate` | Translates dictated text into English for the intake form — same LLM tier as Voice Intake |
 | `POST /api/intake` | Structured intake form — creates a live, queued patient from reviewed details/vitals/labs |
 | `POST /api/extract-lab` | PDF lab report upload — structured demographics, `test_results`, and inferred `vitals`; requires Docling and Ollama |
 | `POST /api/ari` | Stateless ARI preview from an unreviewed snapshot — no patient created |
+| `PATCH /api/patients/{id}/profile` | Edits a patient's chart — demographics, vitals, labs, bed/clinician assignment |
+| `POST /api/patients/{id}/medications` | Adds a medication order to a patient's chart |
+| `PATCH /api/patients/{id}/medications/{med_id}/order` | Edits a medication order (dosage, frequency, route, ...) |
+| `POST /api/medications/schedule` | Schedules a medication ahead of time |
+| `POST /api/medications/emergency` | Orders and immediately records an emergency (given-now) medication |
+| `PATCH /api/patients/{id}/medications/{med_id}` | Records an administration — given / held / refused / not_available / cancelled |
+| `PATCH /api/patients/{id}/medications/{med_id}/given` | Shortcut to mark a dose given |
+| `POST /api/patients/{id}/notes` | Adds a clinical note (`surgical` / `follow_up`) |
+| `POST /api/discharge/{id}` | Discharges a patient — logs the summary, releases their bed and clinician |
 | `POST /api/ward/beds/{id}/status` | Staff sets a bed to available / cleaning / unavailable |
 | `POST /api/ward/clinicians/{id}/status` | Staff sets a clinician to available / off_shift |
 | `POST /api/control/reset` | Reset the simulation |
+| `POST /api/control/surge?value=<multiplier>` | Inject a heterogeneous burst of patients (default 3×) — see **Surge-mode demonstration** above |
+| `POST /api/control/profile?value=<name>` | Switch hospital-capacity preset live — `community_hospital` / `rural_ed` / `urban_trauma_center` |
+| `POST /api/control/purge?value=<days>` | Purge patients past their data-retention window (default 90 days) — see **Regulatory basis** above |
 | `GET /api/audit` | Decision log and agreement rate |
 | `GET /api/model` | Layer 1 metrics |
 
@@ -247,20 +401,26 @@ hand.
 
 ```
 backend/
-  main.py            FastAPI app, scheduler loop, WebSocket
-  db.py              SQLite — append-only scores, audit trail
-  simulation.py      Simulated department and patient physiology
-  ward.py            Bed/clinician roster — the one source of truth Layer 5
-                      routes against and the Ward Map renders
-  layers/            The five layers, one file each
+  main.py            FastAPI app, scheduler loop, WebSocket, surge/profile/purge control
+  auth.py            Access control — X-PULSE-Token bearer gate on every write
+  db.py              SQLite — append-only scores, audit trail, meds/notes, data-retention purge
+  simulation.py      Simulated department and patient physiology (16 scripted patients)
+  ambulance.py       Live fleet tracking on cached, real OSRM road routes
+  ward.py            Bed/clinician roster, loaded from a named hospital-scale profile —
+                      the one source of truth Layer 5 routes against and the Ward Map renders
+  layers/            The scoring pipeline, one file per layer (1, 1b, 2, 2b, 3, 4, 5)
   lab/               PDF lab report extraction — Docling + local Ollama
   ml/train.py        Model training
 frontend/            Next.js + TypeScript nurse console
-  app/               App Router entry point — dashboard, intake, ward routes
-  components/        Navigation, dashboard, board, intake, ward map, drawer
-  lib/               Typed API client and shared domain models
+  app/               App Router entry point — landing, dashboard, intake, ward,
+                      patients (directory + chart), ambulances routes
+  components/        Navigation, dashboard, board, intake, ward map, ambulance
+                      radar, patient chart, drawer
+  lib/               Typed API client (sends the auth header) and shared domain models
 data/
-  clinical_lexicon.json   Red-flag rubric for Layer 2
+  clinical_lexicon.json     Red-flag rubric for Layer 2
+  hospital_profiles.json    Named capacity presets ward.py loads at runtime
+  ambulance_routes.json     Cached real OSRM road routes for the live fleet
 docs/ARCHITECTURE.md
 ```
 

@@ -389,6 +389,58 @@ def audit(conn, limit: int = 60) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def purge_stale_records(conn, retention_days: float = 90.0, now: float | None = None) -> dict[str, int]:
+    """Data-minimisation pass — the DPDP Act 2023's storage-limitation duty
+    (s.8(7): erase personal data once its purpose is served, absent a
+    longer legal-retention requirement) made concrete rather than asserted
+    in a policy document nobody runs. Purges any patient whose most recent
+    score is older than `retention_days`, cascading through every table
+    that references that patient id.
+
+    Deliberately keyed off the *scores* table, not the retention window
+    naively deleting straight from `patients`: a patient's last score is
+    the closest thing this schema has to "case closed", so a patient still
+    inside their retention window keeps every table's rows, and one past
+    it loses all of them together rather than leaving orphaned medication
+    or note rows behind (foreign keys here are documentation, not
+    enforced ON DELETE CASCADE, since SQLite needs that pragma on and this
+    project doesn't turn it on elsewhere).
+
+    Returns a per-table count so a caller (a scheduled job, or a manual
+    admin action) can log what was actually removed — silent deletion of
+    patient data is its own compliance problem.
+    """
+    now = now if now is not None else time.time()
+    cutoff = now - retention_days * 86400.0
+    stale_ids = [row["patient_id"] for row in conn.execute(
+        """SELECT patient_id FROM scores GROUP BY patient_id
+           HAVING MAX(at) < ?""", (cutoff,)).fetchall()]
+    if not stale_ids:
+        return {"patients": 0}
+
+    counts: dict[str, int] = {"patients": 0}
+    placeholders = ",".join("?" for _ in stale_ids)
+    order_ids = [row["id"] for row in conn.execute(
+        f"SELECT id FROM medication_orders WHERE patient_id IN ({placeholders})",
+        stale_ids).fetchall()]
+    if order_ids:
+        order_placeholders = ",".join("?" for _ in order_ids)
+        cur = conn.execute(
+            f"DELETE FROM medication_administrations WHERE order_id IN ({order_placeholders})",
+            order_ids)
+        counts["medication_administrations"] = cur.rowcount
+        cur = conn.execute(
+            f"DELETE FROM medication_orders WHERE id IN ({order_placeholders})", order_ids)
+        counts["medication_orders"] = cur.rowcount
+    for table in ("clinical_notes", "decisions", "recommendations", "scores"):
+        cur = conn.execute(f"DELETE FROM {table} WHERE patient_id IN ({placeholders})", stale_ids)
+        counts[table] = cur.rowcount
+    cur = conn.execute(f"DELETE FROM patients WHERE id IN ({placeholders})", stale_ids)
+    counts["patients"] = cur.rowcount
+    conn.commit()
+    return counts
+
+
 def agreement_rate(conn) -> dict[str, Any]:
     """Shadow-mode metric: how often does the nurse agree with PULSE?
 

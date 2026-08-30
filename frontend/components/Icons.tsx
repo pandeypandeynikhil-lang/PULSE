@@ -55,3 +55,6 @@ export function IconClose(props: IconProps) {
 export function IconReset(props: IconProps) {
   return <svg {...base} {...props}><path d="M20 12a8 8 0 1 1-2.6-5.9" /><path d="M20 4v5h-5" /></svg>;
 }
+export function IconAmbulance(props: IconProps) {
+  return <svg {...base} {...props}><rect x="2" y="9" width="13" height="8" rx="1.5" /><path d="M15 12h4l3 3v2h-7z" /><path d="M7 6.5v5M4.5 9h5" /><circle cx="7" cy="19" r="1.8" /><circle cx="17" cy="19" r="1.8" /></svg>;
+}
