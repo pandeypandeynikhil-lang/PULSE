@@ -12,31 +12,67 @@ signal, and the bed it points to, for as long as the patient is waiting.
 
 ---
 
-## Run it
+## Contents
 
-Start the backend and frontend in separate terminals.
+[Setup](#setup) · [What to watch for](#what-to-watch-for) ·
+[The escalation is not scripted](#the-escalation-is-not-scripted) ·
+[Architecture](#architecture) · [Layer 1 model performance](#layer-1-model-performance) ·
+[Round 2 guidelines — what changed and why](#round-2-guidelines--what-changed-and-why) ·
+[Regulatory basis and access control](#regulatory-basis-and-access-control) ·
+[What is real and what is stubbed](#what-is-real-and-what-is-stubbed) ·
+[API](#api) · [Layout](#layout)
 
-**Terminal 1 - backend (Windows):**
+---
+
+## Setup
+
+Every step below, in order, on Windows, macOS, or Linux — two terminals, nothing
+skipped. The **core app needs only steps 1–4**; everything after that is optional
+and adds one specific feature.
+
+### 1. Prerequisites
+
+Python 3.10+, Node.js 18+ with npm, and git. `python --version` / `node --version`
+to check what you already have.
+
+### 2. Backend — install and train
+
+**Windows (PowerShell):**
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r backend/requirements.txt
-if (!(Test-Path backend/ml/artifacts/vitals_model.pkl)) { python -m backend.ml.train }
-python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+python -m backend.ml.train
 ```
 
-**Terminal 1 - backend (macOS/Linux):**
+**macOS / Linux:**
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r backend/requirements.txt
-[ -f backend/ml/artifacts/vitals_model.pkl ] || python -m backend.ml.train
+python -m backend.ml.train
+```
+
+`pip install` pulls in FastAPI, XGBoost, the Gemini/Groq SDKs, and Docling +
+langchain-ollama for lab-PDF parsing (step 6) — nothing here needs a paid key,
+an API call, or a GPU to *install*. `python -m backend.ml.train` trains Layer 1's
+XGBoost model on the synthetic cohort (~20 seconds) and writes
+`backend/ml/artifacts/vitals_model.pkl`; skip it and the backend trains the same
+model itself the first time it boots, so this step only saves you that first-run
+wait.
+
+### 3. Start the backend
+
+```bash
 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
-**Terminal 2 - frontend:**
+Leave this terminal running — it's the scheduler loop, re-scoring every waiting
+patient once a second for as long as it's up.
+
+### 4. Frontend
 
 ```bash
 cd frontend
@@ -44,8 +80,13 @@ npm install
 npm run dev
 ```
 
-Then open **http://localhost:3000**. First run trains the Layer 1 model
-(~20 seconds); after that it starts immediately.
+Open **http://localhost:3000**. That's the whole app, running fully offline —
+symptom extraction on the deterministic lexicon matcher, everything else at full
+strength: the six-layer scoring pipeline, the deterioration engine, Ward Map,
+ambulance tracking, medications/notes/discharge, surge mode, hospital-profile
+switching, access control. Only two things need anything past this point: richer
+LLM-based extraction (step 5) and lab-PDF upload (step 6) — both fail closed and
+say so plainly if skipped, never silently.
 
 Six routes, one live board underneath all of them: **`/`** is the landing page —
 what the product argues, before you touch it. **Triage Dashboard** (`/dashboard`)
@@ -57,16 +98,81 @@ roster Layer 5 actually routes against, editable in real time. **Patient Directo
 (`/patients`) searches every patient on record; each one opens onto a full chart
 (`/patients/[id]`) — medications, clinical notes, and discharge, detailed below.
 **Ambulance Tracking** (`/ambulances`) is a live radar of the inbound fleet, road
-routes and all.
+routes and all. The department is simulated continuously; reset it from the
+header when needed.
 
-Runs fully offline by default. To turn on the LLM NLP tier (and the Voice Intake
-panel, which needs it): `cp .env.example .env`, fill in `GEMINI_API_KEY` and/or
-`GROQ_API_KEY` (both have a free tier), set `PULSE_NLP_MODE=llm`.
+### 5. Optional — the LLM NLP tier (Voice Intake, richer red-flag extraction)
 
-The department is simulated continuously. Reset the simulation from the header
-when needed.
+Off by default (`PULSE_NLP_MODE=lexicon`); Layer 2's red-flag extraction runs on
+the deterministic lexicon matcher and Voice Intake is disabled until this is on.
 
-### What to watch for
+1. `cp .env.example .env`
+2. Get a free key from **Gemini** (https://aistudio.google.com) and/or **Groq**
+   (https://console.groq.com) — either is enough to turn the tier on; both is
+   better, since PULSE tries Gemini first and only falls to Groq if it fails, so
+   the second key is what makes that failover real rather than theoretical.
+3. Fill in `GEMINI_API_KEY` and/or `GROQ_API_KEY` in `.env`
+4. Set `PULSE_NLP_MODE=llm`
+5. Restart the backend (Ctrl+C, re-run the step 3 command)
+
+The console stamps every score with which tier actually answered
+(`llm-gemini` / `llm-groq` / `lexicon`) so the failover is something you watch
+happen, not a line in this file.
+
+### 6. Optional — lab report PDF parsing (Ollama + Llama 3.1)
+
+Patient Intake's PDF upload and the patient chart's "Upload lab report" panel go
+through `backend/lab/pipeline.py`: **Docling** turns the PDF into structured
+markdown, then a **locally-running Llama 3.1** (via **Ollama**) turns that
+markdown into structured test results — name, value, unit, reference range,
+abnormality flag — which Layer 2b then evaluates and Layer 1 scans for
+vital-sign-shaped entries. This is the one feature in PULSE that depends on a
+*local* LLM rather than Gemini/Groq or the offline lexicon, deliberately: parsing
+a layout-heavy pathology-report table is a job a small local model handles just
+as well as a cloud one, and this way no lab data — someone's actual blood work —
+ever has to leave the machine to be read.
+
+1. **Install Ollama** — https://ollama.com/download (Windows, macOS, Linux). The
+   installer starts the Ollama server as a background service automatically; you
+   don't run anything to keep it alive.
+2. **Pull the model:**
+   ```bash
+   ollama pull llama3.1
+   ```
+   ~4.7 GB, one-time download. Confirm it landed with `ollama list`.
+3. That's it — **no `.env` entry required.** `POST /api/extract-lab` talks to
+   Ollama on its default `localhost:11434` the next time a PDF is uploaded.
+4. To point this at a different local model instead (a smaller one on a slower
+   machine, say — anything `ollama pull`-able works, since `langchain-ollama`
+   only needs a model name), set `PULSE_LAB_OLLAMA_MODEL=<model name>` in `.env`
+   and pull that model instead of `llama3.1`.
+
+If Ollama isn't running, or the model was never pulled, PDF upload fails with a
+plain `422` naming the actual problem — never silently. Nothing else in PULSE
+needs Ollama: every other feature, including the full scoring pipeline, works
+with it never installed at all.
+
+### 7. Optional — refresh the live ambulance routes
+
+`data/ambulance_routes.json` ships pre-fetched and committed, so this step is
+**never required** to run the app — `Engine.reset()` only ever reads that file.
+To regenerate it against OSRM's live routing service instead of the cached one:
+
+```bash
+python -m backend.ambulance
+```
+
+### 8. Optional — change the access-control token before any real deployment
+
+`PULSE_API_TOKEN` / `NEXT_PUBLIC_API_TOKEN` in `.env` default to a fixed demo
+value (`pulse-demo-2026`) so every write endpoint is protected out of the box
+with zero setup — see [Regulatory basis and access control](#regulatory-basis-and-access-control).
+Change both (they must match) before deploying anywhere real; leave them alone
+for local development and demoing.
+
+---
+
+## What to watch for
 
 | Time | What happens |
 |---|---|
